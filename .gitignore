@@ -1,0 +1,19 @@
+# ฐานข้อมูลและข้อมูลใช้งานจริง ไม่ควรขึ้น git
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Python แบบพกพาที่วางไว้ข้าง start.bat
+python/
+
+# ระบบปฏิบัติการ
+.DS_Store
+Thumbs.db
+desktop.ini
