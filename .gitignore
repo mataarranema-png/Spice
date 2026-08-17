@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+FGP-Production-Suite/data/
+dist/
+.DS_Store
