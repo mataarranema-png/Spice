@@ -208,6 +208,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `spice find <file>` เป็นเครื่องมือแยกที่ใช้ได้เดี่ยว ๆ ไม่ต้องมีสถานะก้นหอย
+    if argv and argv[0] == "find":
+        from .find import main as find_main
+
+        return find_main(argv[1:])
     args = build_parser().parse_args(argv)
     return args.func(args)
 
