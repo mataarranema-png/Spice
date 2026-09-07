@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spice-spiral"
+version = "0.1.0"
+description = "ระบบตั้งคำถามแบบก้นหอย — a self-expanding epistemic system that finds its own limits and builds new instruments to pass them"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# แกนกลางไม่พึ่งพาอะไรนอก stdlib โดยตั้งใจ — ก้นหอยต้องหมุนได้แม้ไม่มีเครือข่าย
+dependencies = []
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.40"]
+
+[project.scripts]
+spice = "spice.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["spice*"]
+
+[tool.setuptools.package-data]
+spice = ["py.typed"]
