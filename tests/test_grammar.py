@@ -3,7 +3,7 @@
 import random
 import unittest
 
-from spice.grammar import MINT_MIN_GAIN, MINT_MIN_USES, Grammar
+from spice.grammar import MINT_FLOOR, MINT_MIN_USES, Grammar
 from spice.probe import BASE_OPS, Ref, probe, spec
 
 REFS = [Ref("a", "ก้นหอย"), Ref("b", "การเติบโต")]
@@ -45,7 +45,16 @@ class TestMinting(unittest.TestCase):
         for _ in range(times):
             self.g.observe(probe(outer, probe(inner, REFS[0])), gain)
 
+    def _ambient(self, gain=0.10, times=25):
+        """สร้างพื้นความประหลาดใจของรัน — เกณฑ์หลอมหน่วยเป็นสัมพัทธ์กับมัน
+        คู่หนึ่งจะถูกหลอมได้ก็ต่อเมื่อมันดีกว่าพื้นรอบตัวอย่างชัดเจน."""
+        pairs = (("bridge", "identify"), ("tension", "extent"), ("compare", "bound"))
+        for i in range(times):
+            o, n = pairs[i % len(pairs)]
+            self.g.observe(probe(o, probe(n, REFS[0]), REFS[1]), gain)
+
     def test_a_productive_pair_becomes_one_operator(self):
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 1)
         m = self.g.mint(5)
         self.assertIsNotNone(m)
@@ -54,6 +63,7 @@ class TestMinting(unittest.TestCase):
         self.assertIsNotNone(spec(m.key), "หน่วยใหม่ต้องเข้าไปอยู่ในพีชคณิตทันที")
 
     def test_the_new_unit_composes_like_any_other(self):
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 1)
         m = self.g.mint(5)
         p = probe("limit", probe(m.key, REFS[0]))
@@ -62,31 +72,44 @@ class TestMinting(unittest.TestCase):
         # หน่วยที่หลอมแล้วประหยัดความลึก: รูปนี้เดิมต้องใช้สามชั้น
         self.assertEqual(p.depth, 2)
 
-    def test_a_weak_pair_is_not_minted(self):
-        self._feed("reflect", "bound", MINT_MIN_GAIN - 0.2, MINT_MIN_USES + 3)
+    def test_a_pair_that_is_only_average_is_not_minted(self):
+        """เกณฑ์เป็นสัมพัทธ์: ต้องดีกว่าพื้นของรันนี้เอง ไม่ใช่ผ่านค่าคงที่."""
+        self._ambient(gain=0.5, times=25)                        # พื้นสูง
+        self._feed("reflect", "bound", 0.5, MINT_MIN_USES + 1)   # เท่าพื้นพอดี
+        self.assertGreater(self.g.mint_bar, 0.5)
+        self.assertIsNone(self.g.mint(5))
+
+    def test_a_dead_run_mints_nothing(self):
+        self._feed("reflect", "bound", 0.01, MINT_MIN_USES + 5)
+        self.assertGreaterEqual(self.g.mint_bar, MINT_FLOOR)
         self.assertIsNone(self.g.mint(5))
 
     def test_a_rare_pair_is_not_minted(self):
+        self._ambient()
         self._feed("origin", "bound", 0.9, MINT_MIN_USES - 1)
         self.assertIsNone(self.g.mint(5))
 
     def test_the_same_pair_is_only_minted_once(self):
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 4)
         self.assertIsNotNone(self.g.mint(5))
         self.assertIsNone(self.g.mint(6))
 
     def test_vocabulary_grows_by_exactly_what_was_minted(self):
         before = len(self.g.vocabulary)
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 1)
         self.g.mint(5)
         self.assertEqual(len(self.g.vocabulary), before + 1)
         self.assertEqual(self.g.stats()["base"], len(BASE_OPS))
 
     def test_an_unproductive_unit_is_pruned(self):
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 1)
         m = self.g.mint(5)
-        for _ in range(6):
-            self.g.observe(probe(m.key, REFS[0]), 0.01)
+        self.assertIsNotNone(m)
+        for _ in range(8):
+            self.g.observe(probe(m.key, REFS[0]), 0.0)
         self.assertIn(m.key, [x for x in self.g.prune(9)])
         self.assertNotIn(m.key, self.g.minted)
 
@@ -107,6 +130,7 @@ class TestMinting(unittest.TestCase):
         self.assertGreater(hits, base_hits)
 
     def test_roundtrip_keeps_the_grown_vocabulary(self):
+        self._ambient()
         self._feed("reflect", "mechanism", 0.6, MINT_MIN_USES + 1)
         m = self.g.mint(5)
         clone = Grammar.from_dict(self.g.to_dict(), random.Random(11))

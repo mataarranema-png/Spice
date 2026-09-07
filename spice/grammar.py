@@ -35,9 +35,10 @@ from .probe import (
 )
 
 MINT_MIN_USES = 3        # ต้องเห็นการประกอบนี้ได้ผลกี่ครั้งก่อนหลอมเป็นหน่วยเดียว
-MINT_MIN_GAIN = 0.34     # ความประหลาดใจเฉลี่ยขั้นต่ำของการประกอบนั้น
+MINT_FLOOR = 0.12        # พื้นสัมบูรณ์ — รันที่ตายแล้วต้องไม่หลอมขยะออกมา
+MINT_RATIO = 1.45        # ต้องดีกว่า *พื้นของรันนี้เอง* กี่เท่า
 RETIRE_MIN_USES = 5
-RETIRE_BELOW = 0.12
+RETIRE_RATIO = 0.5       # หน่วยที่งอกแล้วทำได้ต่ำกว่าครึ่งของพื้น = ไม่คุ้มค่าที่มันกิน
 MAX_MINTED = 14
 
 # พยางค์สำหรับตั้งชื่อหน่วยที่งอกใหม่ — ระบบตั้งชื่อเอง ไม่ได้ยืมคำจากภาษาใด
@@ -88,6 +89,8 @@ class Grammar:
         self.minted: dict[str, Minted] = {}
         self.shapes_seen: set[str] = set()
         self.generation = 0
+        self.baseline = 0.0        # ความประหลาดใจเฉลี่ยที่รันนี้ทำได้จริง
+        self._observations = 0
 
     # ---------------- ผลิตคำถาม ----------------
 
@@ -181,9 +184,24 @@ class Grammar:
 
     # ---------------- เรียนรู้จากผล ----------------
 
+    @property
+    def mint_bar(self) -> float:
+        """เกณฑ์หลอมหน่วย — สัมพัทธ์กับสิ่งที่รันนี้ทำได้จริง.
+
+        ตอนแรกใช้ค่าคงที่ 0.34 แล้ววัดได้ว่ามีแค่ 1 จาก 6 seed ที่หลอมหน่วยได้เลย
+        เพราะความประหลาดใจเฉลี่ยของรันจริงอยู่ที่ 0.12–0.20 — เกณฑ์นั้นเรียกร้อง
+        คู่ที่ดีกว่าค่าเฉลี่ยสองเท่า ซึ่งแทบไม่มี และยิ่งหายากขึ้นเมื่อโดเมนถูกขุด
+        จนเกลี้ยง  ภาษาก็หลอมหน่วยที่ให้ผลดี *ผิดปกติเทียบกับพื้นรอบตัว*
+        ไม่ใช่ที่ผ่านค่าสากลค่าหนึ่ง.
+        """
+        return max(MINT_FLOOR, self.baseline * MINT_RATIO)
+
     def observe(self, p: Probe, gain: float) -> None:
         """จดว่าการประกอบแต่ละคู่ในคำถามนี้ให้ผลเท่าไร."""
         self.shapes_seen.add(p.shape)
+        self._observations += 1
+        k = 1.0 / min(self._observations, 60)
+        self.baseline = (1 - k) * self.baseline + k * gain
         for node in p.walk():
             for a in node.args:
                 if isinstance(a, Probe):
@@ -203,9 +221,10 @@ class Grammar:
         """
         if len(self.minted) >= MAX_MINTED:
             return None
+        bar = self.mint_bar
         best: tuple[tuple[str, str], PairStat] | None = None
         for pair, st in self.pairs.items():
-            if st.uses < MINT_MIN_USES or st.mean < MINT_MIN_GAIN:
+            if st.uses < MINT_MIN_USES or st.mean < bar:
                 continue
             key = _mint_key(*pair)
             if key in self.minted:
@@ -252,7 +271,7 @@ class Grammar:
         """หน่วยที่งอกแล้วไม่ให้ผลต้องหายไป — ไวยากรณ์ที่โตอย่างเดียวคือไวยากรณ์ที่พอง."""
         gone: list[str] = []
         for key, m in list(self.minted.items()):
-            if m.uses >= RETIRE_MIN_USES and m.mean < RETIRE_BELOW:
+            if m.uses >= RETIRE_MIN_USES and m.mean < self.baseline * RETIRE_RATIO:
                 del self.minted[key]
                 gone.append(key)
         return gone
@@ -271,6 +290,8 @@ class Grammar:
             "minted": len(self.minted),
             "shapes": len(self.shapes_seen),
             "generation": self.generation,
+            "baseline": round(self.baseline, 4),
+            "mint_bar": round(self.mint_bar, 4),
         }
 
     def to_dict(self) -> dict:
@@ -282,6 +303,8 @@ class Grammar:
             "minted": [m.to_dict() for m in self.minted.values()],
             "shapes_seen": sorted(self.shapes_seen)[:400],
             "generation": self.generation,
+            "baseline": self.baseline,
+            "observations": self._observations,
         }
 
     @classmethod
@@ -297,6 +320,8 @@ class Grammar:
             g._reregister(m)
         g.shapes_seen = set(d.get("shapes_seen", ()))
         g.generation = d.get("generation", 0)
+        g.baseline = d.get("baseline", 0.0)
+        g._observations = d.get("observations", 0)
         return g
 
     def _reregister(self, m: Minted) -> None:
