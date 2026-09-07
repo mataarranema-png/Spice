@@ -31,21 +31,37 @@ EMA = 0.35
 OPTIMISM = 0.55          # fitness เริ่มต้นของยุทธวิธีที่ยังไม่เคยถูกใช้
 RETIRE_BELOW = 0.22
 MIN_USES_BEFORE_RETIRE = 3
+STALE_AFTER = 8          # เกิดมานานเท่านี้แล้วยังไม่เคยถูกเลือกเลย = ตายแล้ว
 W_FLOOR, W_CEIL = 0.10, 0.60   # ห้ามให้พจน์ใดกลืนฟังก์ชันเป้าหมายทั้งหมด
 
 
-def _clamp(w: Weights) -> Weights:
-    """บีบน้ำหนักให้อยู่ในกรอบ แล้ว normalize ใหม่.
+def _clamp(w: Weights, iterations: int = 32) -> Weights:
+    """ฉายน้ำหนักลงบนเซต {sum = 1, W_FLOOR <= w_i <= W_CEIL}.
 
     ถ้าปล่อยอิสระ การไต่เขาจะดันน้ำหนักตัวเดียวไปที่ ~1.0 แล้วระบบจะ
     เหลือแรงจูงใจเดียว — ซึ่งก็คือการยุบก้นหอยกลับเป็นเส้นตรงอีกครั้ง.
+
+    การบีบครั้งเดียวแล้ว normalize ไม่พอ: normalize จะดันค่าที่เพิ่งบีบ
+    ให้ทะลุเพดานอีก (0.60, 0.10, 0.10) -> (0.75, 0.125, 0.125) จึงต้อง
+    สลับบีบ/normalize จนลู่เข้า.
     """
-    w = w.normalized()
+    for _ in range(iterations):
+        w = w.normalized()
+        clamped = Weights(
+            min(W_CEIL, max(W_FLOOR, w.u)),
+            min(W_CEIL, max(W_FLOOR, w.c)),
+            min(W_CEIL, max(W_FLOOR, w.n)),
+        )
+        if abs(clamped.u + clamped.c + clamped.n - 1.0) < 1e-9:
+            return clamped
+        w = clamped
+    # ถ้ายังไม่ลู่เข้าพอดี ให้กรอบชนะผลรวม: `Weights.normalized()` ถูกเรียก
+    # ตอนใช้งานอยู่แล้ว ส่วนเพดานคือสิ่งที่ห้ามละเมิด
     return Weights(
         min(W_CEIL, max(W_FLOOR, w.u)),
         min(W_CEIL, max(W_FLOOR, w.c)),
         min(W_CEIL, max(W_FLOOR, w.n)),
-    ).normalized()
+    )
 
 
 def _root(s: "Strategy") -> str:
@@ -168,14 +184,14 @@ class Population:
                     rep.born.append(child.name)
 
         # 4. ปลดระวาง — แต่ห้ามทำให้ระดับคำถามใดหายไปทั้งระดับ
-        rep.retired.extend(self._retire())
+        rep.retired.extend(self._retire(epoch))
 
         # 5. ไต่เขาน้ำหนักคะแนน
         rep.accepted_weights = self._adapt_weights(reward)
         rep.weights_after = self.weights
         return rep
 
-    def _retire(self) -> list[str]:
+    def _retire(self, epoch: int = 0) -> list[str]:
         retired: list[str] = []
         by_level: dict[int, list[Strategy]] = defaultdict(list)
         for s in self.live():
@@ -191,7 +207,14 @@ class Population:
             return len(survivors) > 1
 
         for s in sorted(self.live(), key=lambda s: s.fitness):
-            if s.uses >= MIN_USES_BEFORE_RETIRE and s.fitness < RETIRE_BELOW and can_drop(s):
+            tried_and_failed = (
+                s.uses >= MIN_USES_BEFORE_RETIRE and s.fitness < RETIRE_BELOW
+            )
+            # "ไม่เคยถูกเลือกเลยตลอด N รอบ" เป็นเหตุผลให้ปลดระวางพอ ๆ กับ
+            # "ถูกเลือกแล้วให้ผลแย่" — ไม่งั้นเครื่องมือที่เกิดจากจุดบอดจะ
+            # สะสมจนท่วมประชากร โดยไม่มีวันถูกตัดออก เพราะมันไม่เคยทำงาน
+            never_used = s.uses == 0 and (epoch - s.born_epoch) >= STALE_AFTER
+            if (tried_and_failed or never_used) and can_drop(s):
                 retired.append(s.name)
 
         # ล้นเพดานประชากร: ตัดตัวอ่อนที่สุดที่ยังทิ้งได้

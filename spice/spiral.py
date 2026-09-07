@@ -159,16 +159,18 @@ class Spiral:
 
         chosen, rec.saturated = self._choose(limits)
 
-        novelties: list[float] = []
         outcomes: dict[str, list[float]] = {}
         for scored in chosen:
             turn = self._investigate_and_integrate(scored)
             rec.turns.append(turn)
-            novelties.append(scored.n)
             outcomes.setdefault(turn.question.strategy, []).append(turn.yield_score)
 
         rec.stats_after = self.graph.stats()
-        rec.novelty_mean = sum(novelties) / len(novelties) if novelties else 0.0
+        # คำถามหนีความอิ่มตัวมีเลขรอบอยู่ในตัว จึงใหม่ 100% เสมอโดยอัตโนมัติ
+        # ถ้านับรวม ระบบจะรายงานว่าตัวเอง "สร้างสรรค์เต็มร้อย" ในรอบที่มันตันสนิท
+        # — คือการโกงมาตรวัดของตัวเอง ต้องนับเฉพาะคำถามที่ผ่านการคัดเลือกจริง
+        earned = [s.n for s in chosen if not s.question.forced]
+        rec.novelty_mean = sum(earned) / len(earned) if earned else 0.0
         rec.reward = epoch_reward(rec.stats_before, rec.stats_after, rec.novelty_mean)
 
         # ---- ระบบมองตัวเอง ----

@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from spice.evolution import RETIRE_BELOW, Population
+from spice.evolution import W_CEIL, W_FLOOR, RETIRE_BELOW, Population, _clamp
 from spice.scoring import Weights
 from spice.selfmodel import CapabilityGap
 from spice.strategies import builtin_strategies
@@ -59,10 +59,31 @@ class TestPopulation(unittest.TestCase):
         for e in range(120):
             reward += 0.01
             pop.evolve(e, [], reward)
-            w = pop.weights.normalized()
-            for term in (w.u, w.c, w.n):
-                self.assertGreater(term, 0.05)
-                self.assertLess(term, 0.7)
+            for term in (pop.weights.u, pop.weights.c, pop.weights.n):
+                self.assertGreaterEqual(term, W_FLOOR)
+                self.assertLessEqual(term, W_CEIL)
+
+    def test_clamp_projects_onto_the_feasible_set(self):
+        for w in (Weights(9, 0.01, 0.01), Weights(0, 0, 1), Weights(0.5, 0.4, 0.1)):
+            c = _clamp(w)
+            for term in (c.u, c.c, c.n):
+                self.assertGreaterEqual(term, W_FLOOR)
+                self.assertLessEqual(term, W_CEIL)
+            self.assertAlmostEqual(c.u + c.c + c.n, 1.0, places=6)
+
+    def test_a_never_used_strategy_is_eventually_retired(self):
+        pop = Population(rng=random.Random(17), max_size=40)
+        pop.strategies["ตัวที่ไม่มีใครเรียกใช้"] = builtin_strategies()[0].__class__(
+            name="ตัวที่ไม่มีใครเรียกใช้",
+            level=QuestionLevel.OBJECT,
+            source="frontier",
+            templates={"th": ["{a}?"]},
+            born_epoch=0,
+        )
+        for e in range(1, 30):
+            pop.credit({"meta_probe": 0.9})
+            pop.evolve(e, [], 0.5)
+        self.assertNotIn("ตัวที่ไม่มีใครเรียกใช้", {s.name for s in pop.live()})
 
     def test_reverting_a_bad_step_is_possible(self):
         pop = Population(rng=random.Random(11))

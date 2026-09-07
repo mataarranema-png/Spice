@@ -18,6 +18,11 @@ from .question import Question, QuestionLedger
 from .types import QuestionLevel, stable_id
 
 # แหล่งเป้าหมายที่ Strategy ดึงจากกราฟได้
+# สระที่มอง (WIDE) กว้างกว่าจำนวนที่หยิบจริง (NARROW) มาก — ความต่างนี้
+# คือสิ่งที่ทำให้พื้นที่คำถามโตตามกราฟแทนที่จะตันอยู่ที่ยอดเดิม
+WIDE = 48
+NARROW = 8
+
 SOURCES = (
     "frontier",        # node ที่ไม่แน่นอนที่สุด
     "unexplained",     # node ที่ไม่มีอะไรอธิบาย
@@ -126,6 +131,40 @@ class Strategy:
 SELF_NODE = "ระบบผู้ถามเอง"
 
 
+def _sample(items: list, ctx: "GenerationContext", k: int) -> list:
+    """สุ่มเลือกแบบถ่วงน้ำหนักจากสระที่กว้างกว่า k มาก.
+
+    ถ้าหยิบ "k อันดับแรก" แบบตายตัวทุกรอบ พื้นที่คำถามจะหยุดโตทันทีที่
+    กราฟโตเกิน k: กราฟมี 200 node แต่ generator เห็นอยู่ 8 อันเดิม
+    ผลคือคำถามซ้ำ ถูกกรองทิ้ง แล้วระบบก็ประกาศว่า "อิ่มตัว" ทั้งที่ยังไม่ได้
+    มองอะไรเลย.  การสุ่มถ่วงน้ำหนักทำให้พื้นที่คำถามโตตามกราฟ.
+    """
+    if len(items) <= k:
+        return list(items)
+    pool = list(items)
+    weights = [max(0.05, w) for w in (_slot_weight(x) for x in pool)]
+    out = []
+    for _ in range(k):
+        total = sum(weights)
+        r = ctx.rng.random() * total
+        acc = 0.0
+        for i, w in enumerate(weights):
+            acc += w
+            if acc >= r:
+                break
+        out.append(pool.pop(i))
+        weights.pop(i)
+    return out
+
+
+def _slot_weight(item: Any) -> float:
+    if isinstance(item, Node):
+        return item.uncertainty + 0.1
+    if isinstance(item, tuple) and item and isinstance(item[0], Node):
+        return item[0].uncertainty + 0.1
+    return 1.0
+
+
 def _node_slot(n: Node) -> dict[str, Any]:
     return {"a": n.label, "status": n.status.value, "_ids": (n.id,), "_subject": n.label}
 
@@ -133,23 +172,23 @@ def _node_slot(n: Node) -> dict[str, Any]:
 def _collect_slots(source: str, ctx: GenerationContext) -> list[dict[str, Any]]:
     g = ctx.graph
     if source == "frontier":
-        return [_node_slot(n) for n in g.frontier(8)]
+        return [_node_slot(n) for n in _sample(g.frontier(WIDE), ctx, NARROW)]
     if source == "unexplained":
-        return [_node_slot(n) for n in g.unexplained()[:8]]
+        return [_node_slot(n) for n in _sample(g.unexplained()[:WIDE], ctx, NARROW)]
     if source == "contradiction":
         return [
             {"a": a.label, "b": b.label, "_ids": (a.id, b.id), "_subject": a.label}
-            for a, b in g.contradiction_pairs()[:8]
+            for a, b in _sample(g.contradiction_pairs()[:WIDE], ctx, NARROW)
         ]
     if source == "hole":
         return [
             {"a": a.label, "b": b.label, "_ids": (a.id, b.id), "_subject": a.label}
-            for a, b in g.structural_holes(8)
+            for a, b in _sample(g.structural_holes(WIDE // 2), ctx, NARROW)
         ]
     if source == "residual":
         return [
             {"a": n.label, "residual": r, "_ids": (n.id,), "_subject": n.label}
-            for n, r in g.open_residuals(8)
+            for n, r in _sample(g.open_residuals(WIDE), ctx, NARROW)
         ]
     if source == "self":
         # คำถามถึงตัวเองผูกกับ node เดียวเสมอ — ระบบจึงสะสม *แบบจำลอง
