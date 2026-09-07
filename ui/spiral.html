@@ -1,0 +1,1439 @@
+<title>ก้นหอยคำถาม</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+<style>
+/* ─────────────────────────────────────────────────────────────
+   ก้นหอยคำถาม — เครื่องมือวัดสำหรับระบบที่ตั้งคำถามกับตัวเอง
+   จงใจเป็นธีมเดียว: หน้าจอหอสังเกตการณ์ตอนกลางคืน ไม่ใช่เอกสาร
+   ทุกสีถูกทาไว้ชัดเจน หน้าเพจจึงยืนได้บนพื้นหลังของ host ทั้งสองแบบ
+   ───────────────────────────────────────────────────────────── */
+:root{
+  color-scheme: dark;
+  --ink:#0B0E1A;
+  --ink-2:#111528;
+  --panel:rgba(18,22,42,.84);
+  --panel-solid:#141829;
+  --line:#262C4A;
+  --line-soft:#1C2138;
+  --text:#E8E5DA;
+  --muted:#8A90AD;
+  --faint:#5A6081;
+
+  /* ramp ของความรู้: ยังไม่ติดไฟ -> สว่าง */
+  --st-unknown:#3B4268;
+  --st-uncertain:#6E5FA0;
+  --st-partial:#C97B3C;
+  --st-known:#F2C14E;
+  --st-contra:#E5484D;
+
+  --amber:#F2A33C;
+  --self:#4FD1C5;
+
+  --r:3px;
+  --f-display:"Chakra Petch","IBM Plex Sans Thai",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans Thai","Noto Sans Thai",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ink); color:var(--text);
+  font-family:var(--f-body); font-size:13px; line-height:1.55;
+  height:100vh; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px}
+
+#stage{position:fixed;inset:0}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+canvas.dragging{cursor:grabbing}
+#vignette{position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(120% 90% at 50% 45%,transparent 40%,rgba(6,8,16,.74) 100%)}
+
+.panel{
+  position:fixed;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--r); backdrop-filter:blur(14px);
+  box-shadow:0 18px 48px rgba(3,5,12,.55);
+}
+.panel h2{
+  margin:0;padding:9px 12px 8px;font-family:var(--f-display);
+  font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--faint);border-bottom:1px solid var(--line-soft);
+  display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+}
+.panel h2 b{font-family:var(--f-mono);font-weight:500;color:var(--muted);letter-spacing:.04em;font-size:10px;
+  text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#brand{top:16px;left:16px;padding:12px 14px 11px;width:262px}
+#brand .mark{display:flex;align-items:center;gap:9px}
+#brand svg{flex:none}
+#brand .name{font-family:var(--f-display);font-weight:700;font-size:17px;letter-spacing:.02em;line-height:1.15}
+#brand .sub{color:var(--faint);font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-family:var(--f-display)}
+#readout{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-top:11px;
+  background:var(--line-soft);border:1px solid var(--line-soft);border-radius:2px;overflow:hidden}
+#readout div{background:var(--panel-solid);padding:6px 7px}
+#readout span{display:block;color:var(--faint);font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-family:var(--f-display)}
+#readout b{font-family:var(--f-mono);font-weight:500;font-size:15px;font-variant-numeric:tabular-nums;
+  color:var(--text);letter-spacing:-.02em}
+#readout b.hot{color:var(--st-contra)}
+
+#stream{top:16px;left:290px;width:min(430px,34vw);max-height:calc(100vh - 130px);display:flex;flex-direction:column}
+#qlist{overflow-y:auto;padding:4px 0 6px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.q{padding:9px 12px 10px;border-bottom:1px solid var(--line-soft);cursor:pointer;
+  border-left:2px solid transparent;transition:background .16s,border-color .16s}
+.q:hover,.q:focus-visible{background:rgba(242,163,60,.06);border-left-color:var(--amber)}
+.q.self:hover{background:rgba(79,209,197,.07);border-left-color:var(--self)}
+.q .meta{display:flex;gap:7px;align-items:center;margin-bottom:4px}
+.lv{font-family:var(--f-display);font-size:9px;font-weight:700;letter-spacing:.1em;
+  padding:1px 5px;border-radius:2px;border:1px solid currentColor;opacity:.92}
+.q .ep{font-family:var(--f-mono);font-size:9.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.q .txt{font-size:12.5px;line-height:1.5}
+.q .res{margin-top:5px;padding-left:11px;border-left:1px solid var(--line);
+  color:var(--muted);font-size:11px;line-height:1.45}
+.q .res::before{content:"\2193\A0";color:var(--amber);font-weight:600}
+.q.forced .txt{color:var(--self)}
+
+#right{position:fixed;top:16px;right:16px;width:298px;display:flex;flex-direction:column;gap:12px;
+  max-height:calc(100vh - 130px)}
+#right .panel{position:static;min-height:0;display:flex;flex-direction:column}
+#pop{flex:1 1 auto;min-height:150px}
+#poplist{overflow-y:auto;padding:5px 0;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.s{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:5px 12px;align-items:center}
+.s:hover{background:rgba(255,255,255,.025)}
+.s .nm{font-family:var(--f-mono);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.s .og{font-family:var(--f-display);font-size:8.5px;letter-spacing:.08em;padding:0 4px;
+  border-radius:2px;white-space:nowrap}
+.og-builtin{color:var(--faint);background:rgba(138,144,173,.12)}
+.og-mutation{color:var(--st-partial);background:rgba(201,123,60,.14)}
+.og-crossover{color:var(--st-known);background:rgba(242,193,78,.14)}
+.og-gap{color:var(--self);background:rgba(79,209,197,.14)}
+.s .bar{grid-column:1/-1;height:2px;background:var(--line-soft);border-radius:1px;overflow:hidden}
+.s .bar i{display:block;height:100%;background:var(--amber);transition:width .5s ease}
+.s.born{animation:born 1.6s ease-out}
+@keyframes born{from{background:rgba(79,209,197,.24)}to{background:transparent}}
+
+#limits{flex:0 0 auto;max-height:36vh}
+#limlist{overflow-y:auto;padding:5px 0 7px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.lim{display:grid;grid-template-columns:22px 1fr;gap:9px;padding:6px 12px;align-items:stretch}
+.lim .sev{position:relative;border-radius:1px;background:var(--line-soft);overflow:hidden;min-height:16px}
+.lim .sev i{position:absolute;inset:auto 0 0 0;background:var(--st-contra);opacity:.85}
+.lim .body{min-width:0}
+.lim .kind{font-family:var(--f-display);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.lim .t{font-size:11px;line-height:1.42;color:var(--muted)}
+#limlist .empty{padding:12px;color:var(--faint);font-size:11px}
+
+#tri{display:flex;align-items:center;gap:11px;padding:9px 12px 11px;border-top:1px solid var(--line-soft)}
+#tri canvas{width:74px;height:66px;flex:none;cursor:default}
+#tri .legend{display:grid;gap:3px;font-family:var(--f-mono);font-size:10px;flex:1}
+#tri .legend div{display:flex;justify-content:space-between;gap:8px;font-variant-numeric:tabular-nums}
+#tri .legend em{font-style:normal;color:var(--muted);font-family:var(--f-body)}
+
+#deck{left:50%;transform:translateX(-50%);bottom:16px;display:flex;align-items:stretch;
+  padding:0;overflow:hidden;max-width:calc(100vw - 32px)}
+#deck > *{border-right:1px solid var(--line-soft)}
+#deck > :last-child{border-right:0}
+.grp{display:flex;align-items:center;gap:7px;padding:8px 11px}
+.btn{background:transparent;border:1px solid var(--line);border-radius:2px;padding:5px 10px;cursor:pointer;
+  font-family:var(--f-display);font-size:10px;font-weight:500;letter-spacing:.11em;
+  color:var(--muted);transition:.16s;white-space:nowrap}
+.btn:hover{color:var(--text);border-color:var(--muted)}
+.btn.on{color:var(--ink);background:var(--amber);border-color:var(--amber);font-weight:700}
+.btn.play{min-width:66px}
+.seg{display:flex;border:1px solid var(--line);border-radius:2px;overflow:hidden}
+.seg .btn{border:0;border-radius:0}
+.seg .btn + .btn{border-left:1px solid var(--line)}
+#ask{background:var(--ink-2);border:1px solid var(--line);border-radius:2px;padding:5px 9px;
+  width:min(270px,24vw);color:var(--text);font-size:12px}
+#ask::placeholder{color:var(--faint)}
+#ask:focus{border-color:var(--amber);outline:none}
+.slab{display:flex;align-items:center;gap:7px;font-family:var(--f-display);font-size:9.5px;
+  letter-spacing:.1em;color:var(--faint)}
+input[type=range]{width:82px;accent-color:var(--amber);cursor:pointer}
+.slab b{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
+  min-width:28px;text-align:right;letter-spacing:0}
+
+#legend{position:fixed;left:16px;bottom:16px;display:flex;flex-direction:column;gap:5px;
+  font-family:var(--f-display);font-size:9px;letter-spacing:.1em;color:var(--faint)}
+#legend div{display:flex;align-items:center;gap:6px}
+#legend i{width:8px;height:8px;border-radius:50%;flex:none}
+
+#ceiling{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;
+  display:none;align-items:center;gap:13px;padding:10px 15px;
+  background:rgba(32,17,20,.94);border:1px solid var(--st-contra);border-radius:var(--r);
+  box-shadow:0 14px 40px rgba(0,0,0,.55);max-width:min(620px,92vw)}
+#ceiling.show{display:flex;animation:rise .38s cubic-bezier(.2,.9,.3,1)}
+@keyframes rise{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+#ceiling .txt{font-size:12px;line-height:1.45}
+#ceiling .txt b{color:var(--st-contra);font-weight:600}
+#ceiling .btn{border-color:var(--st-contra);color:var(--st-contra)}
+#ceiling .btn:hover{background:var(--st-contra);color:var(--ink)}
+
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .12s;z-index:20;
+  background:var(--panel-solid);border:1px solid var(--line);border-radius:2px;padding:7px 9px;
+  max-width:270px;box-shadow:0 10px 28px rgba(0,0,0,.5)}
+#tip.on{opacity:1}
+#tip .l{font-size:12px;line-height:1.4;margin-bottom:3px}
+#tip .st{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.03em}
+#tip .r{margin-top:5px;padding-top:5px;border-top:1px solid var(--line-soft);color:var(--muted);font-size:10.5px}
+
+@media (max-width:1180px){ #stream{display:none} #right{width:266px} }
+@media (max-width:840px){ #right{display:none} #brand{width:214px} #ask{width:140px} #legend{display:none} }
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms !important;transition-duration:.001ms !important}
+}
+</style>
+
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="vignette"></div>
+
+<div class="panel" id="brand">
+  <div class="mark">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+      <path d="M14.6 12.1 a3 3 0 0 1 .9 4.6 a6 6 0 0 1 -8.6 .4 a10 10 0 0 1 -.4 -14"
+            fill="none" stroke="#F2A33C" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="13" cy="13" r="1.7" fill="#4FD1C5"/>
+    </svg>
+    <div>
+      <div class="name">ก้นหอยคำถาม</div>
+      <div class="sub">recursive questioning</div>
+    </div>
+  </div>
+  <div id="readout">
+    <div><span>รอบ</span><b id="r-ep">0</b></div>
+    <div><span>node</span><b id="r-n">0</b></div>
+    <div><span>ขัดแย้ง</span><b id="r-c">0</b></div>
+    <div><span>คำถาม</span><b id="r-q">0</b></div>
+    <div><span>ความใหม่</span><b id="r-nov">0</b></div>
+    <div><span>ยุทธวิธี</span><b id="r-s">0</b></div>
+  </div>
+</div>
+
+<div class="panel" id="stream">
+  <h2>สายธารคำถาม <b id="satflag"></b></h2>
+  <div id="qlist"></div>
+</div>
+
+<div id="right">
+  <div class="panel" id="pop">
+    <h2>ประชากรยุทธวิธี <b id="genlab">gen 0</b></h2>
+    <div id="poplist"></div>
+    <div id="tri">
+      <canvas id="tricv" width="148" height="132" aria-label="น้ำหนักของ U C และ N"></canvas>
+      <div class="legend">
+        <div><em>U ไม่รู้</em><b id="w-u">.33</b></div>
+        <div><em>C ขัดแย้ง</em><b id="w-c">.33</b></div>
+        <div><em>N ใหม่</em><b id="w-n">.33</b></div>
+      </div>
+    </div>
+  </div>
+  <div class="panel" id="limits">
+    <h2>ขอบเขตของตัวเอง <b id="limcount">0</b></h2>
+    <div id="limlist"></div>
+  </div>
+</div>
+
+<div class="panel" id="deck">
+  <div class="grp">
+    <button class="btn play on" id="play">หยุด</button>
+    <button class="btn" id="stepb">ทีละรอบ</button>
+  </div>
+  <div class="grp">
+    <div class="seg" role="group" aria-label="มุมมอง">
+      <button class="btn on" id="v-graph">กราฟ</button>
+      <button class="btn" id="v-spiral">ก้นหอย</button>
+    </div>
+  </div>
+  <div class="grp">
+    <label class="slab" for="speed">จังหวะ <input type="range" id="speed" min="1" max="10" value="4"></label>
+  </div>
+  <div class="grp">
+    <label class="slab" for="cap">เพดาน <input type="range" id="cap" min="40" max="420" step="10" value="150"><b id="capv">150</b></label>
+  </div>
+  <div class="grp">
+    <input id="ask" placeholder="แทรกคำถามของคุณเข้าไปในก้นหอย" aria-label="แทรกคำถาม">
+    <button class="btn" id="askb">ถาม</button>
+  </div>
+  <div class="grp">
+    <button class="btn" id="reseed">เมล็ดใหม่</button>
+  </div>
+</div>
+
+<div id="ceiling">
+  <div class="txt"><b>ชนเพดานแล้ว</b> — ระบบหยุดเพราะทรัพยากร ไม่ใช่เพราะคำถามหมด
+    <br>มันบันทึกเพดานนี้เป็นขอบเขตที่เพิ่งค้นพบ แล้วตั้งคำถามต่อว่าถ้าเพดานถูกยกออก ควรถามอะไร</div>
+  <button class="btn" id="raise">ยกเพดาน</button>
+</div>
+
+<div id="legend">
+  <div><i style="background:#3B4268"></i>ยังไม่รู้</div>
+  <div><i style="background:#6E5FA0"></i>ไม่แน่ใจ</div>
+  <div><i style="background:#C97B3C"></i>รู้บางส่วน</div>
+  <div><i style="background:#F2C14E"></i>รู้แล้ว</div>
+  <div><i style="background:#E5484D"></i>ขัดแย้ง</div>
+  <div><i style="background:#4FD1C5"></i>ตัวระบบเอง</div>
+</div>
+
+<div id="tip" role="status"><div class="l"></div><div class="st"></div><div class="r"></div></div>
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════
+   เครื่องยนต์ — พอร์ตจากแพ็กเกจ Python `spice` ให้หมุนได้ในเบราว์เซอร์
+   กฎเหล็กสามข้อยังถูกบังคับอยู่ในโค้ดนี้เหมือนต้นฉบับ:
+     1. ทุกคำตอบต้องทิ้ง residual ไว้
+     2. ห้ามถามซ้ำ
+     3. ตันแล้วให้ถามถึงความตัน
+   ═══════════════════════════════════════════════════════════════════ */
+
+var LV = ["วัตถุ","กลไก","ข้อสมมติ","อภิคำถาม","ภววิทยา","อ้างถึงตัวเอง"];
+var LV_COLOR = ["#8A90AD","#C97B3C","#F2A33C","#F2C14E","#9B8BD0","#4FD1C5"];
+var ST = {
+  UNKNOWN:         { u:1.00, c:"#3B4268" },
+  UNCERTAIN:       { u:0.70, c:"#6E5FA0" },
+  PARTIALLY_KNOWN: { u:0.45, c:"#C97B3C" },
+  KNOWN:           { u:0.05, c:"#F2C14E" },
+  CONTRADICTED:    { u:0.85, c:"#E5484D" }
+};
+var SELF_NODE = "ระบบผู้ถามเอง";
+
+function rngOf(seed){
+  var a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    var t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function pick(arr, rnd){ return arr[Math.floor(rnd() * arr.length) % arr.length]; }
+
+/* ── ความใหม่: char 4-gram เพราะภาษาไทยไม่เว้นวรรคระหว่างคำ ───── */
+function norm(t){ return String(t).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ""); }
+function shingles(t){
+  var s = norm(t), out = new Set(), i;
+  if (s.length <= 4){ if (s) out.add(s); return out; }
+  for (i = 0; i <= s.length - 4; i++) out.add(s.slice(i, i + 4));
+  return out;
+}
+function jaccard(a, b){
+  if (!a.size || !b.size) return 0;
+  var small = a.size < b.size ? a : b, big = a.size < b.size ? b : a, inter = 0;
+  small.forEach(function(x){ if (big.has(x)) inter++; });
+  return inter ? inter / (a.size + b.size - inter) : 0;
+}
+
+function Ledger(){ this.sigs = new Set(); this.sh = []; this.levels = [0,0,0,0,0,0]; }
+Ledger.prototype.seen = function(t){ return this.sigs.has(norm(t)); };
+Ledger.prototype.novelty = function(t){
+  if (this.sigs.has(norm(t))) return 0;
+  var s = shingles(t);
+  if (!s.size || !this.sh.length) return 1;
+  var worst = 0;
+  for (var i = this.sh.length - 1; i >= 0; i--){
+    var sim = jaccard(s, this.sh[i]);
+    if (sim > worst){ worst = sim; if (worst > 0.99) break; }
+  }
+  return Math.max(0, 1 - worst);
+};
+Ledger.prototype.rarity = function(l){
+  var tot = this.levels.reduce(function(a,b){ return a + b; }, 0);
+  if (!tot) return 1;
+  return Math.max(0, 1 - (this.levels[l] / tot) * 3);
+};
+Ledger.prototype.record = function(q){
+  var sig = norm(q.text);
+  if (this.sigs.has(sig)) return;
+  this.sigs.add(sig); this.sh.push(shingles(q.text)); this.levels[q.level]++;
+  if (this.sh.length > 900) this.sh.shift();
+};
+
+/* ── กราฟความรู้ ──────────────────────────────────────────────── */
+var MAX_LABEL = 46;
+function clean(t){
+  var s = String(t).replace(/^\s*\[[^\]]*\]\s*/, "").replace(/\s*[(（][^)）]*[)）]/g, "")
+                   .replace(/\s+/g, " ").trim();
+  s = s.replace(/^["'“”\-—\s]+/, "").replace(/["'“”\s]+$/, "");
+  if (s.length <= MAX_LABEL) return s || "สิ่งนั้น";
+  var cut = s.slice(0, MAX_LABEL), sp = cut.lastIndexOf(" ");
+  return (sp > MAX_LABEL / 2 ? cut.slice(0, sp) : cut).replace(/[ ,;:]+$/, "") + "…";
+}
+
+function Graph(){ this.nodes = new Map(); this.edges = []; this.ekey = new Set(); }
+Graph.prototype.list = function(){ var o = []; this.nodes.forEach(function(n){ o.push(n); }); return o; };
+Graph.prototype.get = function(l){ return this.nodes.get(l); };
+Graph.prototype.unc = function(n){
+  return Math.max(0, Math.min(1, 0.65 * ST[n.status].u + 0.35 * (1 - n.conf)));
+};
+Graph.prototype.add = function(label, o){
+  o = o || {}; label = clean(label);
+  var n = this.nodes.get(label), status = o.status || "UNKNOWN";
+  if (!n){
+    n = { label: label, status: status, conf: o.conf || 0, level: o.level || 0,
+          residuals: [], visits: 0, born: o.epoch || 0, self: label === SELF_NODE, isNew: 1,
+          x: (Math.random() - 0.5) * 70, y: (Math.random() - 0.5) * 70, vx: 0, vy: 0, deg: 0 };
+    this.nodes.set(label, n);
+    return n;
+  }
+  if (status === "CONTRADICTED") n.status = status;
+  else if (n.status !== "CONTRADICTED" && ST[status].u < ST[n.status].u) n.status = status;
+  n.conf = Math.max(n.conf, o.conf || 0);
+  n.level = Math.max(n.level, o.level || 0);
+  return n;
+};
+Graph.prototype.link = function(a, b, rel){
+  a = clean(a); b = clean(b);
+  var s = this.nodes.get(a), t = this.nodes.get(b);
+  if (!s || !t || s === t) return;
+  var k = a + "\u001f" + b + "\u001f" + rel;
+  if (this.ekey.has(k)) return;
+  this.ekey.add(k); this.edges.push({ s: s, t: t, rel: rel }); s.deg++; t.deg++;
+  if (rel === "contradicts"){ s.status = "CONTRADICTED"; t.status = "CONTRADICTED"; }
+};
+Graph.prototype.neighbours = function(n){
+  var out = new Set();
+  for (var i = 0; i < this.edges.length; i++){
+    var e = this.edges[i];
+    if (e.s === n) out.add(e.t); else if (e.t === n) out.add(e.s);
+  }
+  return out;
+};
+Graph.prototype.frontier = function(k){
+  var g = this;
+  return this.list().sort(function(a, b){
+    return (g.unc(b) - g.unc(a)) || (a.visits - b.visits);
+  }).slice(0, k);
+};
+Graph.prototype.unexplained = function(){
+  var done = new Set();
+  for (var i = 0; i < this.edges.length; i++){
+    var e = this.edges[i];
+    if (e.rel === "explains" || e.rel === "causes") done.add(e.t);
+  }
+  return this.list().filter(function(n){ return !done.has(n); });
+};
+Graph.prototype.contradictions = function(){
+  var out = [], seen = new Set();
+  for (var i = 0; i < this.edges.length; i++){
+    var e = this.edges[i];
+    if (e.rel !== "contradicts") continue;
+    var k = [e.s.label, e.t.label].sort().join("\u001f");
+    if (!seen.has(k)){ seen.add(k); out.push([e.s, e.t]); }
+  }
+  return out;
+};
+Graph.prototype.reach = function(a, b, d){
+  var cur = [a], seen = new Set([a]), i, j;
+  for (i = 0; i < d; i++){
+    var nxt = [];
+    for (j = 0; j < cur.length; j++){
+      var ms = this.neighbours(cur[j]), hit = false;
+      ms.forEach(function(m){
+        if (m === b) hit = true;
+        else if (!seen.has(m)){ seen.add(m); nxt.push(m); }
+      });
+      if (hit) return true;
+    }
+    if (!nxt.length) return false;
+    cur = nxt;
+  }
+  return false;
+};
+Graph.prototype.holes = function(k){
+  var g = this;
+  var top = this.list().sort(function(a, b){ return g.unc(b) - g.unc(a); }).slice(0, Math.max(2, k * 3));
+  var out = [];
+  for (var i = 0; i < top.length && out.length < k; i++)
+    for (var j = i + 1; j < top.length && out.length < k; j++)
+      if (top[i].level === top[j].level && !this.reach(top[i], top[j], 3)) out.push([top[i], top[j]]);
+  return out;
+};
+Graph.prototype.residuals = function(k){
+  var g = this, out = [];
+  this.nodes.forEach(function(n){
+    for (var i = 0; i < n.residuals.length; i++) out.push([n, n.residuals[i]]);
+  });
+  return out.sort(function(a, b){ return g.unc(b[0]) - g.unc(a[0]); }).slice(0, k);
+};
+Graph.prototype.localU = function(n){
+  var g = this, pool = [n], sum = 0;
+  this.neighbours(n).forEach(function(m){ pool.push(m); });
+  for (var i = 0; i < pool.length; i++) sum += g.unc(pool[i]);
+  return sum / pool.length;
+};
+Graph.prototype.localC = function(n){
+  var region = this.neighbours(n); region.add(n);
+  var hits = 0;
+  for (var i = 0; i < this.edges.length; i++){
+    var e = this.edges[i];
+    if (e.rel === "contradicts" && (region.has(e.s) || region.has(e.t))) hits++;
+  }
+  return 1 - 1 / (1 + hits);
+};
+Graph.prototype.stats = function(){
+  var g = this, u = this.list().map(function(n){ return g.unc(n); });
+  return { nodes: this.nodes.size, edges: this.edges.length,
+           contradictions: this.contradictions().length,
+           unexplained: this.unexplained().length,
+           meanU: u.length ? u.reduce(function(a, b){ return a + b; }, 0) / u.length : 0 };
+};
+
+/* ── ยุทธวิธี: คำถามในฐานะ *ข้อมูล* ที่กลายพันธุ์ได้ ────────────── */
+var SOURCES = ["frontier","unexplained","contradiction","hole","residual","self"];
+var REQUIRED = { frontier:["a"], unexplained:["a"], contradiction:["a","b"],
+                 hole:["a","b"], residual:["a","residual"], self:["limit"] };
+
+function S(name, level, source, templates, o){
+  var s = { name:name, level:level, source:source, templates:templates, gen:0, lineage:[],
+            born:0, fitness:0.5, uses:0, origin:"builtin" };
+  if (o) for (var k in o) s[k] = o[k];
+  return s;
+}
+function builtins(){
+  return [
+    S("object_probe", 0, "frontier", [
+      "{a} คืออะไรกันแน่ และอะไรทำให้มันต่างจากสิ่งที่ใกล้เคียงที่สุด?",
+      "{a} เกิดขึ้นได้อย่างไร?",
+      "อะไรคือสิ่งที่เราสังเกตได้จริงเกี่ยวกับ {a} และอะไรที่เราแค่อนุมาน?"]),
+    S("mechanism_probe", 1, "unexplained", [
+      "กลไกอะไรที่ทำให้ {a} เกิดขึ้น และกลไกนั้นต้องการเงื่อนไขอะไรบ้าง?",
+      "ถ้าถอด {a} ออกเป็นชิ้นส่วน ชิ้นไหนที่ขาดไม่ได้?",
+      "อะไรคือขั้นตอนที่เล็กที่สุดที่ยังทำให้ {a} เป็น {a} อยู่?"]),
+    S("assumption_probe", 2, "frontier", [
+      "เราสมมติอะไรไว้เงียบ ๆ ตอนที่พูดว่า {a}?",
+      "ถ้า {a} เป็นเท็จ อะไรที่ยังคงจริงอยู่ และอะไรที่พังตามไปด้วย?",
+      "ข้อสมมติข้อไหนเกี่ยวกับ {a} ที่เราไม่เคยทดสอบเลยสักครั้ง?"]),
+    S("contradiction_probe", 2, "contradiction", [
+      "{a} กับ {b} ขัดแย้งกัน — เงื่อนไขแบบไหนที่ทำให้ทั้งสองจริงพร้อมกันได้?",
+      "ความขัดแย้งระหว่าง {a} กับ {b} เกิดจากข้อเท็จจริง หรือจากนิยามที่เราเลือกใช้?",
+      "ถ้าต้องทิ้งอย่างหนึ่งระหว่าง {a} กับ {b} เราจะเสียความสามารถในการอธิบายอะไรไป?"]),
+    S("bridge_probe", 1, "hole", [
+      "อะไรเชื่อม {a} กับ {b} เข้าด้วยกัน ทั้งที่ยังไม่มีใครลากเส้น?",
+      "ถ้า {a} กับ {b} เป็นอาการสองอย่างของสาเหตุเดียวกัน สาเหตุนั้นคืออะไร?",
+      "อะไรที่ {a} มี แต่ {b} ไม่มี และความต่างนั้นสำคัญหรือแค่บังเอิญ?"]),
+    S("residual_probe", 3, "residual", [
+      "คำตอบเรื่อง {a} ยังอธิบาย “{residual}” ไม่ได้ — อะไรที่หายไปจากแบบจำลอง?",
+      "“{residual}” เป็นข้อยกเว้น หรือเป็นสัญญาณว่าเราเข้าใจ {a} ผิดตั้งแต่ต้น?",
+      "ต้องเปลี่ยนอะไรในนิยามของ {a} จึงจะกลืน “{residual}” เข้าไปได้?"]),
+    S("meta_probe", 3, "frontier", [
+      "ทำไมคำตอบเกี่ยวกับ {a} ถึงออกมาในรูปแบบนี้ และเกณฑ์อะไรทำให้เรานับว่ามันเป็นคำอธิบาย?",
+      "เราจะรู้ได้อย่างไรว่าคำอธิบายเรื่อง {a} ผิด? ถ้าตอบไม่ได้ แปลว่าอะไร?",
+      "วิธีที่เราใช้ตอบเรื่อง {a} เอนเอียงไปทางคำตอบแบบไหนโดยอัตโนมัติ?"]),
+    S("ontology_probe", 4, "frontier", [
+      "{a} เป็นสิ่งที่มีอยู่จริง หรือเป็นหมวดหมู่ที่ผู้สังเกตสร้างขึ้นเพื่อความสะดวก?",
+      "ถ้าไม่มีใครมองอยู่ {a} ยังเป็น {a} อยู่หรือไม่ และคำถามนี้มีความหมายหรือเปล่า?",
+      "ขอบเขตของ {a} สิ้นสุดตรงไหน และใครเป็นคนตัดสินว่าตรงนั้นคือขอบ?"]),
+    S("self_reference_probe", 5, "self", [
+      "ระบบนี้มีข้อจำกัด “{limit}” — ข้อจำกัดนั้นทำให้มันมองไม่เห็นคำถามแบบไหน?",
+      "ระบบตรวจพบ “{limit}” ได้ด้วยเครื่องมือเดิม หรือจำเป็นต้องสร้างเครื่องมือใหม่?",
+      "ถ้าก้าวพ้น “{limit}” ไปได้ จุดบอดอันใหม่ที่จะเกิดขึ้นแทนคืออะไร?"])
+  ];
+}
+
+var PRE = ["ในกรณีที่สุดขั้วที่สุด ","ถ้ามองย้อนกลับด้าน ","โดยไม่ใช้คำศัพท์เดิมเลย ","ถ้าจำกัดให้ตอบด้วยสิ่งที่วัดได้เท่านั้น "];
+var SUF = [" และคำตอบนั้นจะผิดได้ด้วยเงื่อนไขอะไร?"," แล้วอะไรที่คำตอบนั้นยังปล่อยทิ้งไว้?"," ใครจะไม่เห็นด้วยกับคำตอบนี้ และด้วยเหตุผลอะไร?"];
+var SLOTS = ["{a}","{b}","{residual}","{limit}"];
+
+function retarget(templates, source){
+  var req = REQUIRED[source], ok = {};
+  req.forEach(function(r){ ok["{" + r + "}"] = 1; });
+  return templates.map(function(t){
+    SLOTS.forEach(function(tok){
+      if (t.indexOf(tok) >= 0 && !ok[tok]) t = t.split(tok).join("{" + req[0] + "}");
+    });
+    var has = req.some(function(r){ return t.indexOf("{" + r + "}") >= 0; });
+    return has ? t : "{" + req[0] + "}: " + t;
+  });
+}
+function rootOf(s){ return (s.lineage[0] || s.name).split("~")[0].split("×")[0].split("@")[0]; }
+
+function mutate(p, rnd, epoch){
+  var level = p.level;
+  if (rnd() < 0.5) level = Math.max(0, Math.min(5, level + (rnd() < 0.5 ? -1 : 1)));
+  var source = rnd() < 0.25 ? pick(SOURCES, rnd) : p.source;
+  var tm = p.templates.map(function(t){
+    var r = rnd();
+    if (r < 0.4) return pick(PRE, rnd) + t;
+    if (r < 0.8) return t.replace(/\?\s*$/, "") + "?" + pick(SUF, rnd);
+    return t;
+  });
+  return S(rootOf(p) + "~m" + (p.gen + 1) + "." + Math.floor(rnd() * 1000),
+           level, source, retarget(tm, source),
+           { gen: p.gen + 1, lineage: p.lineage.concat([p.name]), born: epoch,
+             fitness: p.fitness * 0.9, origin: "mutation" });
+}
+function cross(a, b, rnd, epoch){
+  var level = Math.min(5, Math.max(a.level, b.level) + 1);
+  var source = rnd() < 0.5 ? a.source : b.source, tm = [];
+  a.templates.slice(0, 2).forEach(function(ta){
+    b.templates.slice(0, 2).forEach(function(tb){
+      tm.push(ta.replace(/\?\s*$/, "") + " — และถ้าถามพร้อมกันว่า " +
+              tb.replace(/\?\s*$/, "") + " คำตอบของข้อแรกยังยืนอยู่ได้ไหม?");
+    });
+  });
+  return S(rootOf(a) + "×" + rootOf(b) + "@g" + (Math.max(a.gen, b.gen) + 1),
+           level, source, retarget(tm.slice(0, 3), source),
+           { gen: Math.max(a.gen, b.gen) + 1, lineage: [a.name, b.name], born: epoch,
+             fitness: (a.fitness + b.fitness) / 2 * 0.9, origin: "crossover" });
+}
+function fromGap(gap, level, source, epoch){
+  var slot = source === "self" ? "{limit}" : "{a}", h = 0;
+  for (var i = 0; i < gap.length; i++) h = (h * 31 + gap.charCodeAt(i)) >>> 0;
+  return S("gap::" + gap.slice(0, 18) + "#" + h.toString(16).slice(0, 4), level, source,
+    ["ระบบตรวจพบช่องโหว่ของตัวเอง: " + gap + " — " + slot + " ถูกมองข้ามเพราะอะไร?",
+     "ถ้า “" + gap + "” เป็นผลจากวิธีถามของระบบ ไม่ใช่ความบังเอิญ ต้องเปลี่ยนวิธีถามอย่างไรกับ " + slot + "?",
+     "เครื่องมือแบบไหนที่ระบบยังไม่มี แล้วจะทำให้ “" + gap + "” หายไป เมื่อใช้กับ " + slot + "?"],
+    { born: epoch, fitness: 0.6, origin: "capability-gap", lineage: ["<self-model>"] });
+}
+
+/* ── ตัวสืบค้น: ทุกคำตอบต้องทิ้งเศษไว้เสมอ ───────────────────── */
+var ASPECTS = [
+  ["โครงสร้างของ", 0, "depends_on"], ["กระบวนการที่ผลิต", 1, "causes"],
+  ["เงื่อนไขที่จำเป็นต่อ", 1, "depends_on"], ["ข้อสมมติเบื้องหลัง", 2, "presupposes"],
+  ["เกณฑ์ที่ใช้ตัดสิน", 3, "abstracts"], ["สถานะเชิงภววิทยาของ", 4, "abstracts"],
+  ["ข้อจำกัดในการสังเกต", 5, "explains"]
+];
+var PHRASE = ["อธิบายได้บางส่วนผ่าน","กลไกที่พอมองเห็นได้คือ","คำตอบนี้ตั้งอยู่บน",
+              "รูปแบบของคำตอบถูกกำหนดโดย","สถานะการมีอยู่ของมันขึ้นกับ","สิ่งที่จำกัดคำตอบนี้คือ"];
+
+function stripAspects(label){
+  var cur = label, depth = 0, again = true;
+  while (again){
+    again = false;
+    for (var i = 0; i < ASPECTS.length; i++){
+      var p = ASPECTS[i][0];
+      if (cur.indexOf(p) === 0 && cur.length > p.length){
+        cur = cur.slice(p.length); depth++; again = true; break;
+      }
+    }
+  }
+  return depth <= 1 ? label : (cur || label);
+}
+function investigate(q, g, rnd){
+  var subject = stripAspects(q.target ? q.target.label : clean(q.subject || q.text));
+  var n = 1 + (q.level >= 2 ? 1 : 0);
+  var shuffled = ASPECTS.slice().sort(function(){ return rnd() - 0.5; });
+  var nodes = [], edges = [], i;
+  for (i = 0; i < n; i++){
+    var asp = shuffled[i], label = clean(asp[0] + subject);
+    nodes.push({ label: label, status: pick(["PARTIALLY_KNOWN","UNCERTAIN","UNKNOWN"], rnd),
+                 conf: 0.15 + rnd() * 0.5, level: asp[1] });
+    edges.push([label, subject, asp[2]]);
+  }
+  var contradicted = 0;
+  if (nodes.length && rnd() < 0.12 + 0.12 * (q.level / 5)){
+    var rivals = g.frontier(6).filter(function(x){ return x.label !== subject; });
+    if (rivals.length){
+      edges.push([nodes[0].label, pick(rivals, rnd).label, "contradicts"]);
+      contradicted = 1;
+    }
+  }
+  var untouched = shuffled.slice(n);
+  var residual = untouched.length ? clean(untouched[0][0] + subject) : "บทบาทของผู้สังเกตในคำตอบนี้";
+  return { answer: subject + ": " + PHRASE[q.level] + " " + nodes.map(function(x){ return x.label; }).join(", "),
+           conf: Math.max(0.05, Math.min(0.9, 0.25 + rnd() * 0.55 - 0.08 * q.level)),
+           nodes: nodes, edges: edges, residual: residual, contradicted: contradicted };
+}
+
+/* ── แบบจำลองที่ระบบมีต่อตัวเอง ──────────────────────────────── */
+var GAP_ROUTE = { recurrence:[3,"residual"], stagnation:[5,"self"], saturation:[4,"hole"],
+                  unresolved:[2,"contradiction"], monoculture:[3,"frontier"],
+                  coverage:[0,"frontier"], resource:[5,"self"] };
+
+function SelfModel(){
+  this.uHist = []; this.nHist = []; this.nodeHist = []; this.cHist = [];
+  this.resAge = new Map(); this.stratUse = new Map(); this.lvUse = [0,0,0,0,0,0];
+  this.seen = new Map();
+}
+SelfModel.prototype.observe = function(stats, levels, strategies, novelty, residuals){
+  var self = this;
+  this.uHist.push(stats.meanU); this.nHist.push(novelty);
+  this.nodeHist.push(stats.nodes); this.cHist.push(stats.contradictions);
+  strategies.forEach(function(s){ self.stratUse.set(s, (self.stratUse.get(s) || 0) + 1); });
+  levels.forEach(function(l){ self.lvUse[l]++; });
+  var open = new Set(residuals);
+  open.forEach(function(r){ self.resAge.set(r, (self.resAge.get(r) || 0) + 1); });
+  Array.from(this.resAge.keys()).forEach(function(r){ if (!open.has(r)) self.resAge.delete(r); });
+};
+SelfModel.prototype.detect = function(epoch, budget){
+  var found = [], W = 3, self = this, i;
+  var totLv = this.lvUse.reduce(function(a, b){ return a + b; }, 0);
+  if (totLv >= 6) this.lvUse.forEach(function(c, l){
+    var share = c / totLv;
+    if (share < 0.03) found.push({ kind:"coverage", level:l,
+      text:"แทบไม่เคยตั้งคำถามระดับ" + LV[l] + "เลย (" + Math.round(share * 100) + "% ของคำถามทั้งหมด)",
+      sev: 0.5 + 0.1 * l });
+  });
+  Array.from(this.resAge.entries()).sort(function(a, b){ return b[1] - a[1]; })
+    .forEach(function(pair){
+      if (pair[1] >= 3) found.push({ kind:"recurrence",
+        text:"“" + pair[0] + "” ยังอธิบายไม่ได้ต่อเนื่อง " + pair[1] + " รอบ",
+        sev: Math.min(1, 0.4 + 0.1 * pair[1]) });
+    });
+  if (this.uHist.length >= W){
+    var t = this.uHist.slice(-W);
+    if (Math.max.apply(null, t) - Math.min.apply(null, t) < 0.005)
+      found.push({ kind:"stagnation",
+        text:"ความไม่แน่นอนรวมแทบไม่ขยับมา " + W + " รอบ — วิธีถามปัจจุบันอาจตันแล้ว", sev:0.7 });
+  }
+  if (this.nodeHist.length >= W && new Set(this.nodeHist.slice(-W)).size === 1)
+    found.push({ kind:"stagnation", text:"กราฟไม่โตเลยมา " + W + " รอบ", sev:0.65 });
+  if (this.nHist.length >= 2){
+    var tn = this.nHist.slice(-W);
+    var avg = tn.reduce(function(a, b){ return a + b; }, 0) / tn.length;
+    if (avg < 0.45) found.push({ kind:"saturation",
+      text:"ความใหม่เฉลี่ยของคำถามตกไปที่ " + avg.toFixed(2) + " — พื้นที่คำถามเดิมใกล้ถูกกินหมด",
+      sev:0.75 });
+  }
+  if (this.cHist.length >= W){
+    var tc = this.cHist.slice(-W);
+    if (tc[0] > 0 && tc[tc.length - 1] >= tc[0])
+      found.push({ kind:"unresolved",
+        text:"ความขัดแย้ง " + tc[tc.length - 1] + " คู่ค้างอยู่ไม่ลดลงมา " + W +
+             " รอบ — ยังไม่มีเกณฑ์ตัดสินระหว่างคำอธิบายที่แข่งกัน", sev:0.8 });
+  }
+  var uses = Array.from(this.stratUse.entries());
+  var totS = uses.reduce(function(a, p){ return a + p[1]; }, 0);
+  if (totS >= 8){
+    var top = uses.sort(function(a, b){ return b[1] - a[1]; })[0];
+    if (top[1] / totS > 0.55) found.push({ kind:"monoculture",
+      text: Math.round(top[1] / totS * 100) + "% ของคำถามมาจากยุทธวิธีเดียว (" + top[0] + ")", sev:0.6 });
+  }
+  if (budget.maxNodes){
+    var ratio = budget.nodes / budget.maxNodes;
+    if (ratio >= 0.75) found.push({ kind:"resource",
+      text:"ใกล้ชนเพดานขนาดกราฟ (" + budget.nodes + "/" + budget.maxNodes +
+           " node) — ขอบเขตนี้มาจากทรัพยากร ไม่ใช่ความไม่รู้",
+      sev: Math.min(1, 0.5 + 0.5 * ratio) });
+  }
+  /* ผสานกับของเดิม เพื่อรู้ว่าข้อจำกัดไหน "อยู่ทน" */
+  var fresh = new Set();
+  found.forEach(function(l){
+    var k = l.kind + ":" + l.text;
+    fresh.add(k);
+    var prev = self.seen.get(k);
+    if (prev){ prev.age++; prev.sev = Math.min(1, prev.sev + 0.03); l.age = prev.age; l.sev = prev.sev; }
+    else { l.age = 1; self.seen.set(k, l); }
+  });
+  Array.from(this.seen.keys()).forEach(function(k){ if (!fresh.has(k)) self.seen.delete(k); });
+  return found.sort(function(a, b){ return b.sev - a.sev; });
+};
+SelfModel.prototype.gaps = function(epoch, budget){
+  return this.detect(epoch, budget)
+    .filter(function(l){ return l.sev >= 0.6 && l.age >= 2; })
+    .slice(0, 2)
+    .map(function(l){
+      var route = GAP_ROUTE[l.kind] || [3, "frontier"];
+      var level = l.kind === "coverage" ? l.level : route[0];
+      var source = l.kind === "coverage" ? (l.level === 5 ? "self" : "frontier") : route[1];
+      return { text: l.text, level: level, source: source };
+    });
+};
+
+/* ── ประชากร: หน่วยที่วิวัฒนาการจริง ─────────────────────────── */
+var FLOOR = 0.10, CEIL = 0.60;
+function clampW(w){
+  for (var i = 0; i < 32; i++){
+    var t = w.u + w.c + w.n;
+    w = { u: w.u / t, c: w.c / t, n: w.n / t };
+    var cl = { u: Math.min(CEIL, Math.max(FLOOR, w.u)),
+               c: Math.min(CEIL, Math.max(FLOOR, w.c)),
+               n: Math.min(CEIL, Math.max(FLOOR, w.n)) };
+    if (Math.abs(cl.u + cl.c + cl.n - 1) < 1e-9) return cl;
+    w = cl;
+  }
+  return { u: Math.min(CEIL, Math.max(FLOOR, w.u)), c: Math.min(CEIL, Math.max(FLOOR, w.c)),
+           n: Math.min(CEIL, Math.max(FLOOR, w.n)) };
+}
+function Population(rnd){
+  this.map = new Map();
+  builtins().forEach(function(s){ this.map.set(s.name, s); }, this);
+  this.w = { u:0.34, c:0.33, n:0.33 };
+  this.rnd = rnd; this.max = 20; this.min = 6; this.gen = 0;
+  this.best = -Infinity; this.step = null;
+}
+Population.prototype.live = function(){ var o = []; this.map.forEach(function(s){ o.push(s); }); return o; };
+Population.prototype.credit = function(o){
+  for (var n in o){
+    var s = this.map.get(n);
+    if (!s) continue;
+    s.uses++;
+    s.fitness = 0.65 * s.fitness + 0.35 * Math.max(0, Math.min(1, o[n]));
+  }
+};
+Population.prototype.decay = function(used){
+  this.map.forEach(function(s, n){ if (!used.has(n)) s.fitness *= 0.97; });
+};
+Population.prototype.evolve = function(epoch, gaps, reward){
+  var self = this, rnd = this.rnd, born = [], retired = [];
+  this.gen++;
+  gaps.forEach(function(g){
+    var s = fromGap(g.text, g.level, g.source, epoch);
+    if (!self.map.has(s.name)){ self.map.set(s.name, s); born.push(s.name); }
+  });
+  var ranked = this.live().sort(function(a, b){ return b.fitness - a.fitness; });
+  if (ranked.length && this.map.size < this.max){
+    var parent = pick(ranked.slice(0, Math.max(1, Math.floor(ranked.length / 3))), rnd);
+    var c1 = mutate(parent, rnd, epoch);
+    if (!this.map.has(c1.name)){ this.map.set(c1.name, c1); born.push(c1.name); }
+  }
+  if (ranked.length >= 2 && this.map.size < this.max){
+    var a = ranked[0], base = rootOf(a);
+    var b = ranked.slice(1).filter(function(s){ return rootOf(s) !== base; })[0] || ranked[1];
+    var c2 = cross(a, b, rnd, epoch);
+    if (!this.map.has(c2.name)){ this.map.set(c2.name, c2); born.push(c2.name); }
+  }
+  /* ปลดระวาง — แต่ห้ามทำให้ระดับคำถามใดหายไปทั้งระดับ */
+  var drop = new Set();
+  function canDrop(s){
+    if (self.map.size - drop.size <= self.min) return false;
+    var same = self.live().filter(function(x){ return x.level === s.level && !drop.has(x.name); });
+    return same.length > 1;
+  }
+  this.live().sort(function(a, b){ return a.fitness - b.fitness; }).forEach(function(s){
+    var failed = s.uses >= 3 && s.fitness < 0.22;
+    var stale = s.uses === 0 && epoch - s.born >= 8;
+    if ((failed || stale) && canDrop(s)) drop.add(s.name);
+  });
+  while (this.map.size - drop.size > this.max){
+    var cands = this.live().filter(function(s){ return !drop.has(s.name) && canDrop(s); });
+    if (!cands.length) break;
+    drop.add(cands.sort(function(a, b){ return a.fitness - b.fitness; })[0].name);
+  }
+  drop.forEach(function(n){ self.map.delete(n); retired.push(n); });
+  /* ไต่เขาน้ำหนักแบบ (1+1)-ES */
+  if (this.step){
+    if (reward >= this.best) this.best = reward;
+    else this.w = { u: Math.max(0.02, this.w.u - this.step.u),
+                    c: Math.max(0.02, this.w.c - this.step.c),
+                    n: Math.max(0.02, this.w.n - this.step.n) };
+  } else this.best = reward;
+  function gauss(){ return (rnd() + rnd() + rnd() - 1.5) * 0.09; }
+  this.step = { u: gauss(), c: gauss(), n: gauss() };
+  this.w = clampW({ u: Math.max(0.02, this.w.u + this.step.u),
+                    c: Math.max(0.02, this.w.c + this.step.c),
+                    n: Math.max(0.02, this.w.n + this.step.n) });
+  return { born: born, retired: retired };
+};
+
+/* ── เครื่องยนต์ก้นหอย ────────────────────────────────────────── */
+function Spiral(topic, seed){
+  this.rnd = rngOf(seed);
+  this.g = new Graph(); this.led = new Ledger();
+  this.pop = new Population(rngOf(seed + 1)); this.sm = new SelfModel();
+  this.budget = { maxNodes: 150, nodes: 0 };
+  this.epoch = 0; this.k = 3; this.questions = []; this.pending = [];
+  this.lastBorn = []; this.limits = []; this.ceilingHit = null;
+  this.saturated = false; this.lastNovelty = 0;
+  this.g.add(topic, { status:"UNKNOWN", epoch:0 });
+}
+Spiral.prototype.slots = function(source, limits){
+  var g = this.g, rnd = this.rnd, WIDE = 40, N = 8;
+  function sample(arr, weight){
+    if (arr.length <= N) return arr;
+    var pool = arr.slice(), wt = pool.map(weight), out = [];
+    for (var i = 0; i < N && pool.length; i++){
+      var tot = wt.reduce(function(a, b){ return a + b; }, 0), r = rnd() * tot, j = 0;
+      for (; j < wt.length; j++){ r -= wt[j]; if (r <= 0) break; }
+      j = Math.min(j, pool.length - 1);
+      out.push(pool.splice(j, 1)[0]); wt.splice(j, 1);
+    }
+    return out;
+  }
+  function nw(n){ return g.unc(n) + 0.1; }
+  function pw(p){ return g.unc(p[0]) + 0.1; }
+  if (source === "frontier")
+    return sample(g.frontier(WIDE), nw).map(function(n){ return { a:n.label, t:n }; });
+  if (source === "unexplained")
+    return sample(g.unexplained().slice(0, WIDE), nw).map(function(n){ return { a:n.label, t:n }; });
+  if (source === "contradiction")
+    return sample(g.contradictions().slice(0, WIDE), pw)
+      .map(function(p){ return { a:p[0].label, b:p[1].label, t:p[0] }; });
+  if (source === "hole")
+    return sample(g.holes(Math.floor(WIDE / 2)), pw)
+      .map(function(p){ return { a:p[0].label, b:p[1].label, t:p[0] }; });
+  if (source === "residual")
+    return sample(g.residuals(WIDE), pw)
+      .map(function(p){ return { a:p[0].label, residual:p[1], t:p[0] }; });
+  if (source === "self")
+    return limits.slice(0, 8).map(function(l){ return { limit:l, subject:SELF_NODE }; });
+  return [];
+};
+Spiral.prototype.step = function(){
+  var g = this.g, rnd = this.rnd, self = this, i;
+  var before = g.stats();
+  this.limits = this.sm.detect(this.epoch, this.budget);
+  var limTexts = this.limits.map(function(l){ return l.text; });
+
+  /* สร้างผู้สมัคร */
+  var cands = this.pending.slice();
+  this.pending = [];
+  this.pop.live().forEach(function(s){
+    var slots = self.slots(s.source, limTexts);
+    if (!slots.length) return;
+    var tmpl = s.templates.slice().sort(function(){ return rnd() - 0.5; }).slice(0, 2);
+    tmpl.forEach(function(t){
+      slots.slice(0, 3).forEach(function(sl){
+        var text = t;
+        ["a","b","residual","limit"].forEach(function(key){
+          text = text.split("{" + key + "}").join(sl[key] !== undefined ? sl[key] : "");
+        });
+        if (!text.trim() || text.indexOf("{") >= 0) return;
+        cands.push({ text: text, level: s.level, strategy: s.name, target: sl.t || null,
+                     subject: sl.subject || sl.a, epoch: self.epoch });
+      });
+    });
+  });
+
+  /* คัดเลือก Q* = argmax(w_u·U + w_c·C + w_n·N) */
+  var w = this.pop.w, seenSig = new Set(), scored = [];
+  cands.forEach(function(q){
+    var sig = norm(q.text);
+    if (seenSig.has(sig) || self.led.seen(q.text)) return;
+    seenSig.add(sig);
+    var U = q.target ? g.localU(q.target) : 0.9;
+    var C = q.target ? g.localC(q.target) : 0.3;
+    C = Math.min(1, C + 0.25 * (q.level / 5));
+    var N = self.led.novelty(q.text) * (0.6 + 0.4 * self.led.rarity(q.level));
+    if (N < 0.35 && !q.forced) return;
+    scored.push({ q:q, U:U, C:C, N:N, total: w.u * U + w.c * C + w.n * N });
+  });
+  scored.sort(function(a, b){ return b.total - a.total; });
+
+  var chosen = [], chosenSh = [];
+  for (i = 0; i < scored.length && chosen.length < this.k; i++){
+    var sh = shingles(scored[i].q.text);
+    var dup = chosenSh.some(function(p){ return jaccard(sh, p) > 0.55; });
+    if (dup) continue;
+    chosen.push(scored[i]); chosenSh.push(sh);
+  }
+
+  /* กฎข้อ 3 — ตันแล้วให้ถามถึงความตัน */
+  this.saturated = chosen.length < this.k;
+  if (this.saturated){
+    var stuck = limTexts[0] || "พื้นที่คำถามชุดเดิมถูกใช้จนหมด";
+    var shapes = [
+      "[รอบ " + this.epoch + "] คำถามที่ระบบสร้างได้ทั้งหมดตอนนี้ถูกถามไปหมดแล้ว โดยมี “" + stuck +
+        "” ค้างอยู่ — คำถามชนิดใดที่ภาษาปัจจุบันของระบบยังพูดออกมาไม่ได้เลย?",
+      "[รอบ " + this.epoch + "] ถ้าความอิ่มตัวนี้เป็นผลจากวิธีแทนความรู้ (กราฟ node-edge) ไม่ใช่จากโลก — " +
+        "โครงสร้างแบบไหนที่จะทำให้คำถามใหม่กลับมาเป็นไปได้?",
+      "[รอบ " + this.epoch + "] อะไรที่ระบบนับว่าไม่ใช่คำถามโดยอัตโนมัติ และการนับแบบนั้นตัดอะไรทิ้งไปบ้าง?"
+    ];
+    var need = this.k - chosen.length;
+    for (i = 0; i < Math.min(need, shapes.length); i++)
+      chosen.push({ q:{ text: shapes[i], level:5, strategy:"saturation-escape", target:null,
+                        subject:SELF_NODE, epoch:this.epoch, forced:true },
+                    U:1, C:0.6, N:1, total:1 });
+  }
+
+  /* สืบค้น แล้วผนวกกลับเข้ากราฟ */
+  var outcomes = {}, earned = [];
+  chosen.forEach(function(s){
+    var q = s.q;
+    self.led.record(q);
+    if (!q.target && q.subject)
+      q.target = g.add(q.subject, { status:"UNKNOWN", level:q.level, epoch:self.epoch });
+
+    var f = investigate(q, g, rnd);
+    var n0 = g.nodes.size;
+    f.nodes.forEach(function(nd){
+      g.add(nd.label, { status:nd.status, conf:nd.conf, level:nd.level, epoch:self.epoch });
+    });
+    f.edges.forEach(function(e){ g.link(e[0], e[1], e[2]); });
+
+    if (q.target){
+      q.target.visits++;
+      q.target.conf = Math.min(0.95, q.target.conf + 0.35 * f.conf);
+      if (q.target.status === "UNKNOWN") q.target.status = "PARTIALLY_KNOWN";
+      else if (q.target.status === "PARTIALLY_KNOWN" && q.target.conf > 0.7)
+        q.target.status = f.contradicted ? "UNCERTAIN" : "KNOWN";
+    }
+
+    /* หัวใจ: คำตอบกลายเป็นคำถามรุ่นถัดไป */
+    var res = clean(f.residual);
+    if (q.target && q.target.residuals.indexOf(res) < 0){
+      q.target.residuals.push(res);
+      if (q.target.residuals.length > 3) q.target.residuals.shift();
+    }
+    g.add(res, { status:"UNKNOWN", level: Math.min(5, q.level + 1), epoch:self.epoch });
+    if (q.target) g.link(res, q.target.label, "unknown_link");
+
+    var added = g.nodes.size - n0;
+    var yieldScore = Math.max(0, Math.min(1, 0.35 * s.N + 0.25 * Math.min(1, added / 2) +
+                                             0.25 * f.contradicted + 0.1 * s.U + 0.05 * f.conf));
+    if (!outcomes[q.strategy]) outcomes[q.strategy] = [];
+    outcomes[q.strategy].push(yieldScore);
+    if (!q.forced) earned.push(s.N);
+    self.questions.push({ text:q.text, level:q.level, epoch:self.epoch, residual:res,
+                          answer:f.answer, target:q.target, forced: !!q.forced });
+  });
+
+  var after = g.stats();
+  /* คำถามหนีความอิ่มตัวมีเลขรอบอยู่ในตัว จึงใหม่ 100% เสมอ — ถ้านับรวม
+     ระบบจะรายงานว่าตัวเองสร้างสรรค์เต็มร้อยในรอบที่มันตันสนิท */
+  var novelty = earned.length ? earned.reduce(function(a, b){ return a + b; }, 0) / earned.length : 0;
+  var grew = (after.nodes - before.nodes) / Math.max(1, before.nodes);
+  var resolved = before.meanU - after.meanU;
+  var surfaced = (after.contradictions - before.contradictions) * 0.1;
+  var reward = 0.3 * Math.min(1, grew) + 0.3 * Math.max(-1, Math.min(1, resolved * 4)) +
+               0.25 * Math.min(1, surfaced) + 0.15 * novelty;
+
+  this.sm.observe(after,
+    chosen.map(function(s){ return s.q.level; }),
+    chosen.map(function(s){ return s.q.strategy; }),
+    novelty,
+    g.residuals(32).map(function(p){ return p[1]; }));
+
+  var avg = {};
+  for (var name in outcomes)
+    avg[name] = outcomes[name].reduce(function(a, b){ return a + b; }, 0) / outcomes[name].length;
+  this.pop.credit(avg);
+  this.pop.decay(new Set(Object.keys(outcomes)));
+  var ev = this.pop.evolve(this.epoch, this.sm.gaps(this.epoch, this.budget), reward);
+  this.lastBorn = ev.born;
+
+  this.budget.nodes = after.nodes;
+  this.lastNovelty = novelty;
+  this.epoch++;
+  return after;
+};
+Spiral.prototype.atCeiling = function(){ return this.budget.nodes >= this.budget.maxNodes; };
+Spiral.prototype.recordBoundary = function(){
+  this.g.add("ขอบเขตที่ค้นพบ: เพดานขนาดกราฟ ที่รอบ " + this.epoch,
+             { status:"UNKNOWN", level:5, epoch:this.epoch });
+  this.pending.push({ text:"ระบบหยุดเพราะเพดานขนาดกราฟ ไม่ใช่เพราะคำถามหมด — " +
+                            "ถ้าเพดานนี้ถูกยกออก คำถามข้อถัดไปควรเป็นอะไร?",
+                      level:5, strategy:"boundary", target:null, subject:SELF_NODE,
+                      epoch:this.epoch, forced:true });
+};
+Spiral.prototype.ask = function(text){
+  var target = null;
+  this.g.nodes.forEach(function(n){ if (!target && text.indexOf(n.label) >= 0) target = n; });
+  this.pending.push({ text: text, level: target ? 0 : 4, strategy:"human", target: target,
+                      subject: target ? target.label : null, epoch:this.epoch, forced:true });
+};
+
+/* ═══════════════════════════════════════════════════════════════════
+   การแสดงผล — สองมุมมองของข้อมูลชุดเดียวกัน
+     กราฟ   : กราฟความรู้แบบ force-directed
+     ก้นหอย : เกลียวกรวยที่ไต่ขึ้น รัศมี = เวลา, ความสูง = ระดับคำถาม
+   ═══════════════════════════════════════════════════════════════════ */
+var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+var tip = document.getElementById("tip");
+var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+var W = 0, H = 0, DPR = 1;
+var cam = { x:0, y:0, z:1 }, drag = null, hover = null, focusNode = null;
+var mode = 0, modeMix = 0;
+var sp, playing = !reduce, speed = 4, acc = 0, lastT = 0, seedN = 7;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+function physics(){
+  var ns = sp.g.list();
+  if (ns.length > 360) return;
+  var cell = 76, grid = new Map(), i, j;
+  for (i = 0; i < ns.length; i++){
+    var n = ns[i], k = Math.floor(n.x / cell) + ":" + Math.floor(n.y / cell);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(n);
+  }
+  for (i = 0; i < ns.length; i++){
+    var a = ns[i], fx = 0, fy = 0;
+    var gx = Math.floor(a.x / cell), gy = Math.floor(a.y / cell);
+    for (var dx = -1; dx <= 1; dx++) for (var dy = -1; dy <= 1; dy++){
+      var c = grid.get((gx + dx) + ":" + (gy + dy));
+      if (!c) continue;
+      for (j = 0; j < c.length; j++){
+        var m = c[j];
+        if (m === a) continue;
+        var vx = a.x - m.x, vy = a.y - m.y, d2 = vx * vx + vy * vy;
+        if (d2 < 1){ vx = Math.random() - 0.5; vy = Math.random() - 0.5; d2 = 1; }
+        if (d2 > 9000) continue;
+        var f = 1200 / d2;
+        fx += vx * f; fy += vy * f;
+      }
+    }
+    fx -= a.x * 0.0034; fy -= a.y * 0.0034;
+    a.vx = (a.vx + fx) * 0.82; a.vy = (a.vy + fy) * 0.82;
+  }
+  for (i = 0; i < sp.g.edges.length; i++){
+    var e = sp.g.edges[i];
+    var ex = e.t.x - e.s.x, ey = e.t.y - e.s.y;
+    var d = Math.sqrt(ex * ex + ey * ey) || 1;
+    var rest = e.rel === "contradicts" ? 130 : 78;
+    var force = (d - rest) * 0.0125;
+    var ux = ex / d * force, uy = ey / d * force;
+    e.s.vx += ux; e.s.vy += uy; e.t.vx -= ux; e.t.vy -= uy;
+  }
+  for (i = 0; i < ns.length; i++){
+    var p = ns[i];
+    p.x += Math.max(-9, Math.min(9, p.vx));
+    p.y += Math.max(-9, Math.min(9, p.vy));
+    if (p.isNew > 0) p.isNew = Math.max(0, p.isNew - 0.022);
+  }
+}
+
+/* กึ่งกลางของ "พื้นที่ที่มองเห็นจริง" — ระหว่างแผงซ้ายกับแผงขวา
+   ไม่ใช่กึ่งกลางหน้าต่าง ซึ่งถูกสายธารคำถามบังไปครึ่งหนึ่ง */
+function centerX(){
+  var left = W > 1180 ? 290 + Math.min(430, W * 0.34) : 16;
+  var right = W > 840 ? W - 314 : W - 16;
+  return (left + right) / 2;
+}
+var TURNS = 3.1, LEVEL_RISE = 34, LEVEL_BASE = 88;
+function spiralRadius(){ return Math.min(W * 0.30, H * 0.40); }
+/* รัศมี = เวลา, ความสูง = ระดับคำถาม, จำนวนรอบคงที่เสมอ
+   ถ้าปล่อยให้มุมเดินคงที่ต่อคำถาม เกลียวจะวนทับตัวเองจนอ่านไม่ออก
+   เมื่อคำถามเยอะขึ้น — จำนวนรอบต้องคงที่ ความถี่ต้องยืดตามจำนวน */
+function spiralPos(i, total){
+  var t = (i + 1.5) / (total + 1.5);
+  var theta = t * TURNS * 6.2832;
+  var r = 34 + Math.pow(t, 0.74) * spiralRadius();
+  return { x: Math.cos(theta) * r, y: Math.sin(theta) * r * 0.38 };
+}
+
+function draw(){
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(centerX() + cam.x, H / 2 + cam.y);
+  ctx.scale(cam.z, cam.z);
+
+  var gA = 1 - modeMix, sA = modeMix, i;
+
+  if (gA > 0.01){
+    ctx.globalAlpha = gA;
+    ctx.lineWidth = 1;
+    for (i = 0; i < sp.g.edges.length; i++){
+      var e = sp.g.edges[i];
+      ctx.strokeStyle = e.rel === "contradicts" ? "rgba(229,72,77,.42)"
+        : e.rel === "unknown_link" ? "rgba(90,96,129,.20)" : "rgba(110,118,160,.30)";
+      if (e.rel === "unknown_link") ctx.setLineDash([2, 4]); else ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(e.s.x, e.s.y); ctx.lineTo(e.t.x, e.t.y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    var ns = sp.g.list();
+    for (i = 0; i < ns.length; i++){
+      var n = ns[i];
+      var u = sp.g.unc(n), r = 3.1 + Math.sqrt(n.deg) * 1.5 + (n.self ? 4 : 0);
+      var col = n.self ? "#4FD1C5" : ST[n.status].c;
+      if (n.isNew > 0){
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 16 * n.isNew, 0, 6.2832);
+        ctx.strokeStyle = col; ctx.globalAlpha = gA * n.isNew * 0.55; ctx.stroke();
+        ctx.globalAlpha = gA;
+      }
+      if (n === hover || n === focusNode){
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 7, 0, 6.2832);
+        ctx.strokeStyle = "#F2A33C"; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 6.2832);
+      ctx.fillStyle = col;
+      ctx.globalAlpha = gA * (0.42 + 0.58 * (1 - u));
+      ctx.fill();
+      ctx.globalAlpha = gA;
+      if (n.status === "CONTRADICTED"){
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 3.4, 0, 6.2832);
+        ctx.strokeStyle = "rgba(229,72,77,.6)"; ctx.stroke();
+      }
+      if (n.self || n === hover || n === focusNode || n.deg > 10){
+        ctx.font = '500 10.5px "IBM Plex Sans Thai",sans-serif';
+        ctx.fillStyle = n.self ? "#4FD1C5" : "rgba(232,229,218,.82)";
+        ctx.textAlign = "center";
+        ctx.fillText(n.label.slice(0, 26), n.x, n.y - r - 6);
+      }
+    }
+  }
+
+  if (sA > 0.01){
+    ctx.globalAlpha = sA;
+    var qs = sp.questions, total = Math.max(qs.length, 18), R = spiralRadius() + 34;
+
+    /* ระนาบของแต่ละระดับ — วาดจากบนลงล่างเพื่อให้ทับซ้อนถูกลำดับ */
+    for (var l = 5; l >= 0; l--){
+      var y = LEVEL_BASE - l * LEVEL_RISE;
+      ctx.beginPath();
+      ctx.ellipse(0, y, R, R * 0.38, 0, 0, 6.2832);
+      ctx.fillStyle = l === 5 ? "rgba(79,209,197,.030)" : "rgba(120,128,175,.016)";
+      ctx.fill();
+      ctx.strokeStyle = l === 5 ? "rgba(79,209,197,.30)" : "rgba(110,118,160,.20)";
+      ctx.lineWidth = 1; ctx.stroke();
+      ctx.font = '700 9.5px "Chakra Petch","IBM Plex Sans Thai",sans-serif';
+      ctx.fillStyle = l === 5 ? "rgba(79,209,197,.92)" : "rgba(138,144,173,.72)";
+      ctx.textAlign = "left";
+      ctx.fillText(LV[l], R + 12, y + 3.5);
+    }
+
+    /* เส้นด้ายของการถาม — จางที่อดีต สว่างที่ปัจจุบัน */
+    var pts = [];
+    for (i = 0; i < qs.length; i++){
+      var pp = spiralPos(i, total);
+      pts.push({ x: pp.x, y: pp.y + LEVEL_BASE - qs[i].level * LEVEL_RISE, lv: qs[i].level });
+    }
+    ctx.lineWidth = 1.3;
+    for (i = 1; i < pts.length; i++){
+      ctx.beginPath();
+      ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+      ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.strokeStyle = "#F2A33C";
+      ctx.globalAlpha = sA * (0.07 + 0.33 * (i / pts.length));
+      ctx.stroke();
+    }
+
+    /* จุดคำถาม */
+    for (i = 0; i < pts.length; i++){
+      var age = i / Math.max(1, pts.length - 1);
+      var rr = 2.0 + age * 3.0;
+      ctx.beginPath(); ctx.arc(pts[i].x, pts[i].y, rr, 0, 6.2832);
+      ctx.fillStyle = LV_COLOR[pts[i].lv];
+      ctx.globalAlpha = sA * (0.28 + 0.72 * age);
+      ctx.fill();
+    }
+    /* คำถามล่าสุด — จุดที่ก้นหอยกำลังอยู่ */
+    if (pts.length){
+      var last = pts[pts.length - 1];
+      ctx.globalAlpha = sA;
+      ctx.beginPath(); ctx.arc(last.x, last.y, 9, 0, 6.2832);
+      ctx.strokeStyle = LV_COLOR[last.lv]; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.font = '700 9.5px "Chakra Petch","IBM Plex Sans Thai",sans-serif';
+      ctx.fillStyle = LV_COLOR[last.lv];
+      ctx.textAlign = "center";
+      ctx.fillText("รอบ " + qs[qs.length - 1].epoch, last.x, last.y - 15);
+    }
+    ctx.globalAlpha = sA;
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* ── สามเหลี่ยมน้ำหนัก U/C/N ─────────────────────────────────── */
+var tcv = document.getElementById("tricv"), tctx = tcv.getContext("2d"), trail = [];
+function drawTri(){
+  var w = tcv.width, h = tcv.height;
+  tctx.clearRect(0, 0, w, h);
+  var A = { x: w / 2, y: 12 }, B = { x: 14, y: h - 14 }, C = { x: w - 14, y: h - 14 };
+  tctx.beginPath(); tctx.moveTo(A.x, A.y); tctx.lineTo(B.x, B.y); tctx.lineTo(C.x, C.y); tctx.closePath();
+  tctx.strokeStyle = "#262C4A"; tctx.lineWidth = 1.5; tctx.stroke();
+  var wt = sp.pop.w, tot = wt.u + wt.c + wt.n;
+  var p = { x: (A.x * wt.u + B.x * wt.c + C.x * wt.n) / tot,
+            y: (A.y * wt.u + B.y * wt.c + C.y * wt.n) / tot };
+  trail.push(p);
+  if (trail.length > 46) trail.shift();
+  tctx.beginPath();
+  for (var i = 0; i < trail.length; i++)
+    i ? tctx.lineTo(trail[i].x, trail[i].y) : tctx.moveTo(trail[i].x, trail[i].y);
+  tctx.strokeStyle = "rgba(242,163,60,.34)"; tctx.lineWidth = 1.5; tctx.stroke();
+  tctx.beginPath(); tctx.arc(p.x, p.y, 4, 0, 6.2832);
+  tctx.fillStyle = "#F2A33C"; tctx.fill();
+  tctx.font = '700 11px "Chakra Petch",sans-serif';
+  tctx.fillStyle = "#5A6081";
+  tctx.textAlign = "center"; tctx.fillText("U", A.x, A.y - 2);
+  tctx.textAlign = "left";   tctx.fillText("C", 2, h - 3);
+  tctx.textAlign = "right";  tctx.fillText("N", w - 2, h - 3);
+}
+
+/* ── แผงข้อมูล ────────────────────────────────────────────────── */
+function $(id){ return document.getElementById(id); }
+var ORIGIN_CLS = { builtin:"og-builtin", mutation:"og-mutation",
+                   crossover:"og-crossover", "capability-gap":"og-gap" };
+var ORIGIN_TH = { builtin:"ต้นฉบับ", mutation:"กลายพันธุ์",
+                  crossover:"ผสมข้าม", "capability-gap":"จุดบอด" };
+function esc(s){
+  return String(s).replace(/[&<>"]/g, function(m){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[m];
+  });
+}
+
+function renderPanels(){
+  var st = sp.g.stats();
+  $("r-ep").textContent = sp.epoch;
+  $("r-n").textContent = st.nodes;
+  var c = $("r-c");
+  c.textContent = st.contradictions;
+  c.classList.toggle("hot", st.contradictions > 0);
+  $("r-q").textContent = sp.led.sigs.size;
+  $("r-nov").textContent = sp.lastNovelty.toFixed(2);
+  $("r-s").textContent = sp.pop.map.size;
+  $("genlab").textContent = "gen " + sp.pop.gen;
+  var sf = $("satflag");
+  sf.textContent = sp.saturated ? "อิ่มตัว → ถามถึงความอิ่มตัว" : "";
+  sf.style.color = sp.saturated ? "#4FD1C5" : "";
+
+  $("qlist").innerHTML = sp.questions.slice(-26).reverse().map(function(q){
+    return '<div class="q' + (q.level === 5 ? " self" : "") + (q.forced ? " forced" : "") +
+      '" tabindex="0" data-l="' + esc(q.target ? q.target.label : "") + '">' +
+      '<div class="meta"><span class="lv" style="color:' + LV_COLOR[q.level] + '">' + LV[q.level] + "</span>" +
+      '<span class="ep">รอบ ' + q.epoch + "</span></div>" +
+      '<div class="txt">' + esc(q.text) + "</div>" +
+      '<div class="res">' + esc(q.residual) + "</div></div>";
+  }).join("");
+
+  $("poplist").innerHTML = sp.pop.live().sort(function(a, b){ return b.fitness - a.fitness; })
+    .map(function(s){
+      return '<div class="s' + (sp.lastBorn.indexOf(s.name) >= 0 ? " born" : "") + '">' +
+        '<div class="nm" title="' + esc(s.name) + '">' + esc(s.name) + "</div>" +
+        '<div class="og ' + ORIGIN_CLS[s.origin] + '">' + ORIGIN_TH[s.origin] + "</div>" +
+        '<div class="bar"><i style="width:' + Math.round(s.fitness * 100) + '%"></i></div></div>';
+    }).join("");
+
+  $("limcount").textContent = sp.limits.length;
+  $("limlist").innerHTML = sp.limits.length
+    ? sp.limits.slice(0, 9).map(function(l){
+        return '<div class="lim"><div class="sev"><i style="height:' +
+          Math.round(l.sev * 100) + '%"></i></div><div class="body">' +
+          '<div class="kind">' + l.kind + " · " + (l.age || 1) + ' รอบ</div>' +
+          '<div class="t">' + esc(l.text) + "</div></div></div>";
+      }).join("")
+    : '<div class="empty">ยังตรวจไม่พบขอบเขต — เดินก้นหอยต่ออีกสองสามรอบ</div>';
+
+  $("w-u").textContent = sp.pop.w.u.toFixed(2).slice(1);
+  $("w-c").textContent = sp.pop.w.c.toFixed(2).slice(1);
+  $("w-n").textContent = sp.pop.w.n.toFixed(2).slice(1);
+  drawTri();
+  $("ceiling").classList.toggle("show", !!sp.ceilingHit);
+}
+
+/* ── วงรอบหลัก ────────────────────────────────────────────────── */
+function tick(now){
+  requestAnimationFrame(tick);
+  var dt = Math.min(64, now - lastT);
+  lastT = now;
+
+  if (Math.abs(modeMix - mode) > 0.001) modeMix += (mode - modeMix) * (reduce ? 1 : 0.08);
+  else modeMix = mode;
+
+  if (!reduce) physics();
+
+  if (playing){
+    acc += dt;
+    if (acc > 1400 / speed){
+      acc = 0;
+      if (sp.atCeiling()){
+        if (!sp.ceilingHit){ sp.ceilingHit = true; sp.recordBoundary(); renderPanels(); }
+      } else { sp.step(); renderPanels(); }
+    }
+  }
+  draw();
+}
+
+/* ── ปฏิสัมพันธ์ ─────────────────────────────────────────────── */
+function toWorld(cx, cy){
+  return { x: (cx - centerX() - cam.x) / cam.z, y: (cy - H / 2 - cam.y) / cam.z };
+}
+cv.addEventListener("pointermove", function(e){
+  if (drag){
+    cam.x = drag.cx + (e.clientX - drag.px);
+    cam.y = drag.cy + (e.clientY - drag.py);
+    return;
+  }
+  if (modeMix > 0.5){ hover = null; tip.classList.remove("on"); return; }
+  var p = toWorld(e.clientX, e.clientY), best = null, bd = 18 / cam.z;
+  var ns = sp.g.list();
+  for (var i = 0; i < ns.length; i++){
+    var d = Math.sqrt((ns[i].x - p.x) * (ns[i].x - p.x) + (ns[i].y - p.y) * (ns[i].y - p.y));
+    if (d < bd){ bd = d; best = ns[i]; }
+  }
+  hover = best;
+  if (best){
+    tip.classList.add("on");
+    tip.style.left = Math.min(W - 286, e.clientX + 14) + "px";
+    tip.style.top = Math.min(H - 140, e.clientY + 14) + "px";
+    tip.querySelector(".l").textContent = best.label;
+    var stEl = tip.querySelector(".st");
+    stEl.textContent = best.status + " · ระดับ" + LV[best.level] +
+                       " · ความมั่นใจ " + best.conf.toFixed(2);
+    stEl.style.color = best.self ? "#4FD1C5" : ST[best.status].c;
+    tip.querySelector(".r").textContent =
+      best.residuals.length ? "↓ " + best.residuals.join("  ·  ") : "";
+  } else tip.classList.remove("on");
+});
+cv.addEventListener("pointerdown", function(e){
+  if (hover && modeMix < 0.5){
+    focusNode = hover;
+    sp.ask("ที่ “" + hover.label + "” — อะไรที่เรายังไม่ได้ถามเกี่ยวกับมันเลย และเพราะอะไร?");
+    if (!playing){ sp.step(); renderPanels(); }
+    return;
+  }
+  drag = { px:e.clientX, py:e.clientY, cx:cam.x, cy:cam.y };
+  cv.classList.add("dragging");
+});
+window.addEventListener("pointerup", function(){ drag = null; cv.classList.remove("dragging"); });
+cv.addEventListener("wheel", function(e){
+  e.preventDefault();
+  cam.z = Math.max(0.28, Math.min(3.2, cam.z * Math.exp(-e.deltaY * 0.0014)));
+}, { passive: false });
+
+$("qlist").addEventListener("click", function(e){
+  var el = e.target.closest(".q");
+  if (!el || !el.dataset.l) return;
+  var n = sp.g.get(el.dataset.l);
+  if (n){
+    focusNode = n; mode = 0;
+    $("v-graph").classList.add("on"); $("v-spiral").classList.remove("on");
+    cam.x = -n.x * cam.z; cam.y = -n.y * cam.z;
+  }
+});
+$("play").addEventListener("click", function(){
+  playing = !playing;
+  $("play").textContent = playing ? "หยุด" : "เล่น";
+  $("play").classList.toggle("on", playing);
+});
+$("stepb").addEventListener("click", function(){
+  if (sp.atCeiling()){ sp.ceilingHit = true; sp.recordBoundary(); } else sp.step();
+  renderPanels();
+});
+$("v-graph").addEventListener("click", function(){
+  mode = 0; $("v-graph").classList.add("on"); $("v-spiral").classList.remove("on");
+});
+$("v-spiral").addEventListener("click", function(){
+  mode = 1; $("v-spiral").classList.add("on"); $("v-graph").classList.remove("on");
+});
+$("speed").addEventListener("input", function(e){ speed = +e.target.value; });
+$("cap").addEventListener("input", function(e){
+  sp.budget.maxNodes = +e.target.value;
+  $("capv").textContent = e.target.value;
+  if (!sp.atCeiling()) sp.ceilingHit = null;
+  renderPanels();
+});
+$("raise").addEventListener("click", function(){
+  var next = Math.min(420, sp.budget.maxNodes + 90);
+  sp.budget.maxNodes = next;
+  $("cap").value = next; $("capv").textContent = next;
+  sp.ceilingHit = null;
+  renderPanels();
+});
+function submitAsk(){
+  var v = $("ask").value.trim();
+  if (!v) return;
+  sp.ask(v); $("ask").value = "";
+  if (!playing){ sp.step(); renderPanels(); }
+}
+$("askb").addEventListener("click", submitAsk);
+$("ask").addEventListener("keydown", function(e){ if (e.key === "Enter") submitAsk(); });
+$("reseed").addEventListener("click", function(){ seedN += 1; boot(seedN); });
+window.addEventListener("keydown", function(e){
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === " "){ e.preventDefault(); $("play").click(); }
+  if (e.key === "g" || e.key === "G") $("v-graph").click();
+  if (e.key === "s" || e.key === "S") $("v-spiral").click();
+});
+
+/* ── เริ่มต้น: เดินไปก่อน 14 รอบ ให้เฟรมแรกมีของจริงให้ดู ────── */
+function boot(seed){
+  sp = new Spiral("ก้นหอย", seed);
+  sp.budget.maxNodes = +$("cap").value;
+  trail.length = 0; focusNode = null; hover = null;
+  cam = { x:0, y:0, z:1 };
+  for (var i = 0; i < 14 && !sp.atCeiling(); i++) sp.step();
+  for (var j = 0; j < 340 && !reduce; j++) physics();
+  renderPanels();
+}
+boot(seedN);
+requestAnimationFrame(tick);
+</script>
