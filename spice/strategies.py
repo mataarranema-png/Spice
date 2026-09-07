@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .graph import KnowledgeGraph, Node
+from .probe import Ref
 from .question import Question, QuestionLedger
 from .types import QuestionLevel, stable_id
 
@@ -46,6 +47,7 @@ class GenerationContext:
     epoch: int
     rng: random.Random
     lang: str = "th"
+    grammar: Any = None                       # ไวยากรณ์ที่ใช้ประกอบคำถาม
     limits: list[str] = field(default_factory=list)
     recent_answers: list[tuple[str, str]] = field(default_factory=list)
     budget_per_strategy: int = 3
@@ -63,7 +65,10 @@ class Strategy:
     born_epoch: int = 0
     fitness: float = 0.5
     uses: int = 0
-    offered: int = 0        # จำนวนรอบที่แหล่งเป้าหมายของมัน *มีของให้ถาม*
+    offered: int = 0
+    mode: str = "template"   # "template" = ประโยคที่มนุษย์เขียน
+                             # "grammar"  = ประกอบจากพีชคณิตของการถาม
+    params: dict = field(default_factory=dict)   # นโยบายการประกอบ (โหมด grammar)        # จำนวนรอบที่แหล่งเป้าหมายของมัน *มีของให้ถาม*
     wins: float = 0.0
     origin: str = "builtin"
 
@@ -77,6 +82,8 @@ class Strategy:
         return ctx.rng.sample(pool, k)
 
     def generate(self, ctx: GenerationContext) -> list[Question]:
+        if self.mode == "grammar":
+            return self._generate_from_grammar(ctx)
         slots = _collect_slots(self.source, ctx)
         if not slots:
             return []
@@ -100,6 +107,49 @@ class Strategy:
                 out.append(q)
         return out
 
+    def _generate_from_grammar(self, ctx: GenerationContext) -> list[Question]:
+        """ประกอบคำถามจากไวยากรณ์ — รูปที่ได้ไม่ได้ถูกเขียนไว้ที่ไหนเลย.
+
+        เมื่อไวยากรณ์หลอมหน่วยใหม่ขึ้นมา ยุทธวิธีตัวนี้จะเริ่มผลิตคำถามรูปใหม่
+        ทันทีโดยไม่มีใครต้องแก้โค้ดหรือเขียนแม่แบบเพิ่ม.
+        """
+        if ctx.grammar is None:
+            return []
+        pool = [n for n in ctx.graph.frontier(WIDE) if not _is_self(n)]
+        if not pool:
+            return []
+        chosen = _sample(pool, ctx, NARROW)
+        refs = [Ref(n.id, n.label) for n in chosen]
+        self.offered += 1
+        out: list[Question] = []
+        for _ in range(ctx.budget_per_strategy * 2):
+            tree = ctx.grammar.compose(
+                refs,
+                max_depth=int(self.params.get("depth", 3)),
+                lifting_bias=float(self.params.get("lift", 0.45)),
+            )
+            if tree is None:
+                continue
+            text = tree.render(ctx.lang)
+            if not text or len(text) > MAX_QUESTION:
+                continue
+            targets = tuple(dict.fromkeys(r.id for r in tree.refs()))
+            out.append(
+                Question(
+                    text=text,
+                    level=tree.level,
+                    strategy=self.name,
+                    targets=targets,
+                    epoch=ctx.epoch,
+                    subject=next((r.hint for r in tree.refs() if r.hint), ""),
+                    probe=tree.op,
+                    tree=tree,
+                )
+            )
+            if len(out) >= ctx.budget_per_strategy:
+                break
+        return out
+
     # ---------- persistence ----------
 
     def to_dict(self) -> dict:
@@ -116,6 +166,8 @@ class Strategy:
             "offered": self.offered,
             "wins": self.wins,
             "origin": self.origin,
+            "mode": self.mode,
+            "params": self.params,
         }
 
     @classmethod
@@ -133,6 +185,8 @@ class Strategy:
             offered=d.get("offered", 0),
             wins=d.get("wins", 0.0),
             origin=d.get("origin", "builtin"),
+            mode=d.get("mode", "template"),
+            params=dict(d.get("params", {})),
         )
 
 
@@ -440,6 +494,13 @@ def builtin_strategies() -> list[Strategy]:
             },
         ),
         Strategy(
+            name="grammar_probe",
+            level=QuestionLevel.MECHANISM,
+            source="frontier",
+            mode="grammar",
+            templates={"th": ["{a}"], "en": ["{a}"]},
+        ),
+        Strategy(
             name="self_reference_probe",
             level=QuestionLevel.SELF_REFERENCE,
             source="self",
@@ -456,6 +517,26 @@ def builtin_strategies() -> list[Strategy]:
                 ],
             },
         ),
+    ]
+
+
+def grammar_strategies() -> list[Strategy]:
+    """ประชากรสำหรับโดเมนที่ *ไม่มีภาษา*.
+
+    ไม่มีแม่แบบประโยคสักอัน คำถามทุกข้อถูกประกอบจากพีชคณิต แล้วผิวภาษาไทย
+    ถูก render ทีหลังเพื่อให้มนุษย์อ่านได้เท่านั้น — ถอดออกทั้งหมดก็ยังทำงาน
+    ต่างกันแค่นโยบายการประกอบ: ตื้น/ลึก และเอนไปทางตัวยกระดับมากน้อยแค่ไหน
+    """
+    return [
+        Strategy(
+            name=f"grammar_d{d}_l{int(l * 100)}",
+            level=QuestionLevel(min(5, d)),
+            source="frontier",
+            mode="grammar",
+            templates={"th": ["{a}"], "en": ["{a}"]},
+            params={"depth": d, "lift": l},
+        )
+        for d, l in ((1, 0.0), (2, 0.25), (2, 0.6), (3, 0.35), (3, 0.7), (4, 0.5))
     ]
 
 
@@ -519,6 +600,13 @@ def mutate_strategy(
         templates[lang] = mutated
 
     templates = _retarget_templates(templates, parent.source, source)
+    params = dict(parent.params)
+    if parent.mode == "grammar":
+        # ลูกของยุทธวิธีเชิงไวยากรณ์สืบทอด *นโยบายการประกอบ* แล้วขยับมัน
+        # ความลึกกับความเอนไปทางตัวยกระดับ คือสิ่งที่กำหนดว่ารูปคำถามแบบไหน
+        # จะถูกสร้างได้บ้าง — มันจึงควรวิวัฒนาการเหมือนอย่างอื่น
+        params["depth"] = max(1, min(5, params.get("depth", 3) + rng.choice((-1, 0, 1))))
+        params["lift"] = max(0.05, min(0.9, params.get("lift", 0.45) + rng.gauss(0, 0.12)))
     name = f"{_base_name(parent.name)}~m{parent.generation + 1}.{rng.randrange(1000):03d}"
     return Strategy(
         name=name,
@@ -530,6 +618,8 @@ def mutate_strategy(
         born_epoch=epoch,
         fitness=parent.fitness * 0.9,
         origin="mutation",
+        mode=parent.mode,
+        params=params,
     )
 
 

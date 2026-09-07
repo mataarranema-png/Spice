@@ -27,7 +27,12 @@ def ctx(limits=("หน่วยความจำจำกัด",), seed=0):
     g.add_node("การจัดเรียงแบบฟีโบนักชี", confidence=0.4)
     g.add_edge("การเติบโตแบบโนมอน", "ก้นหอย", Relation.EXPLAINS)
     g.add_edge("การจัดเรียงแบบฟีโบนักชี", "ก้นหอย", Relation.CAUSES)
-    return GenerationContext(g, QuestionLedger(), 0, random.Random(seed), limits=list(limits))
+    from spice.grammar import Grammar
+
+    return GenerationContext(
+        g, QuestionLedger(), 0, random.Random(seed),
+        grammar=Grammar(random.Random(seed)), limits=list(limits),
+    )
 
 
 class TestStrategies(unittest.TestCase):

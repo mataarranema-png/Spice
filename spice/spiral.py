@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from . import gain as gainlib
 from .evolution import EvolutionReport, Population
+from .grammar import Grammar
 from .graph import KnowledgeGraph
 from .investigator import (
     Investigator,
@@ -79,6 +80,7 @@ class EpochRecord:
     gaps: list[str] = field(default_factory=list)
     evolution: str = ""
     saturated: bool = False
+    minted: str | None = None      # หน่วยไวยากรณ์ที่งอกในรอบนี้
 
     def to_dict(self) -> dict:
         return {
@@ -94,6 +96,7 @@ class EpochRecord:
             "gaps": self.gaps,
             "evolution": self.evolution,
             "saturated": self.saturated,
+            "minted": self.minted,
         }
 
 
@@ -107,6 +110,7 @@ class Spiral:
         self_model: SelfModel | None = None,
         investigator: Investigator | None = None,
         budget: Budget | None = None,
+        grammar: Grammar | None = None,
         seed: int = 0,
         lang: str = "th",
         questions_per_epoch: int = 3,
@@ -116,6 +120,7 @@ class Spiral:
         self.ledger = ledger or QuestionLedger()
         self.population = population or Population(rng=random.Random(seed + 1))
         self.self_model = self_model or SelfModel()
+        self.grammar = grammar or Grammar(random.Random(seed + 3))
         self.investigator = investigator or ReflectiveInvestigator(random.Random(seed + 2))
         self.budget = budget or Budget()
         self.lang = lang
@@ -226,6 +231,24 @@ class Spiral:
         report: EvolutionReport = self.population.evolve(self.epoch, gaps, rec.reward)
         rec.evolution = report.summary()
 
+        # ---- ไวยากรณ์เรียนรู้จากผลของรูปคำถามที่มันประกอบขึ้น ----
+        for t in turns:
+            if t.question.tree is not None:
+                self.grammar.observe(t.question.tree, t.gain.get("total", 0.0))
+        minted = self.grammar.mint(self.epoch)
+        if minted is not None:
+            rec.minted = minted.key
+            self.graph.add_node(
+                f"หน่วยไวยากรณ์ใหม่: {minted.coined}",
+                status=EpistemicStatus.PARTIALLY_KNOWN,
+                confidence=0.5,
+                level=QuestionLevel.SELF_REFERENCE,
+                tags=("self", "grammar"),
+                provenance="grammar",
+                epoch=self.epoch,
+            )
+        self.grammar.prune(self.epoch)
+
         rec.migrated = self._maybe_migrate()
 
         self.budget.nodes = rec.stats_after["nodes"]
@@ -260,6 +283,7 @@ class Spiral:
                 for t in r.turns
             ],
             focus_ids=self._focus_ids(),
+            grammar=self.grammar,
         )
 
         candidates: list[Question] = list(self.pending)
@@ -601,11 +625,14 @@ class Spiral:
 
     def report(self, last: int = 3) -> str:
         st = self.graph.stats()
+        gr = self.grammar.stats()
         lines = [
             f"ก้นหอยรอบที่ {self.epoch} | node {st['nodes']} | edge {st['edges']} "
             f"| ขัดแย้ง {st['contradictions']} | U เฉลี่ย {st['mean_uncertainty']:.3f}",
             f"ยุทธวิธีมีชีวิต {len(self.population.live())} ตัว "
             f"(เจเนอเรชัน {self.population.generation}) | ถามไปแล้ว {len(self.ledger)} คำถาม",
+            f"ไวยากรณ์: คำศัพท์ {gr['vocabulary']} ตัว (ฐาน {gr['base']} + งอกเอง "
+            f"{gr['minted']}) | รูปคำถามที่เคยสร้าง {gr['shapes']} แบบ",
             "",
         ]
         for rec in self.history[-last:]:
@@ -616,6 +643,8 @@ class Spiral:
             )
             if rec.migrated:
                 lines.append(f"  ⇢ อพยพย่าน: {rec.migrated}")
+            if rec.minted:
+                lines.append(f"  ✦ ไวยากรณ์งอกหน่วยใหม่: {rec.minted}")
             for t in rec.turns:
                 lines.append(f"  [{t.question.level.th}] {t.question.text}")
                 lines.append(f"    → {t.answer}")
@@ -644,6 +673,7 @@ class Spiral:
             "ledger": self.ledger.to_dict(),
             "population": self.population.to_dict(),
             "self_model": self.self_model.to_dict(),
+            "grammar": self.grammar.to_dict(),
             "budget": self.budget.to_dict(),
             "focus": self.focus,
             "proposed": [
@@ -673,6 +703,7 @@ class Spiral:
             ledger=QuestionLedger.from_dict(d.get("ledger", {})),
             population=Population.from_dict(d["population"], random.Random(seed + 1)),
             self_model=SelfModel.from_dict(d.get("self_model", {})),
+            grammar=Grammar.from_dict(d.get("grammar", {}), random.Random(seed + 3)),
             investigator=investigator,
             budget=Budget.from_dict(d.get("budget", {})),
             seed=seed,

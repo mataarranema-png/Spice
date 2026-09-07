@@ -17,6 +17,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from .probe import Probe
 from .types import QuestionLevel, stable_id
 
 # สัดส่วนที่ *ควรเป็น* ของแต่ละระดับ ตามวุฒิภาวะของกราฟ
@@ -63,6 +64,8 @@ class Question:
     parent: str | None = None
     scores: dict[str, float] = field(default_factory=dict)
     forced: bool = False                    # มาจาก residual: ข้ามการคัดเลือก
+    tree: Probe | None = None               # ต้นไม้คำถาม ถ้าคำถามนี้ถูกประกอบ
+                                            # ขึ้นจากไวยากรณ์แทนที่จะมาจากแม่แบบ
     probe: str = ""                         # ชนิดของหัววัด (ชื่อรากของยุทธวิธี)
                                             # `object_probe~m3.221` กับ `object_probe`
                                             # คือหัววัดเดียวกัน แค่คนละรุ่น
@@ -87,7 +90,10 @@ class Question:
         คนละสำนวน  การกลายพันธุ์ของแม่แบบทำให้ระบบผลิตคำถามแบบนั้นได้
         ไม่จำกัด แล้วหลอกตัวเองว่ากำลังสำรวจอยู่.
         """
-        probe = self.probe or self.strategy
+        # ถ้าคำถามมีต้นไม้ อัตลักษณ์เชิงแนวคิดคือ *รูป* ของต้นไม้ ซึ่งแข็งแรง
+        # กว่าชื่อหัววัดมาก: reflect(mechanism(x)) กับ mechanism(x) ต่างกันจริง
+        # ในขณะที่ชื่อยุทธวิธีอาจเหมือนกัน
+        probe = self.tree.shape if self.tree is not None else (self.probe or self.strategy)
         return f"{int(self.level)}|{probe}|{'+'.join(sorted(self.targets))}"
 
     def to_dict(self) -> dict:
@@ -104,6 +110,7 @@ class Question:
             "forced": self.forced,
             "subject": self.subject,
             "probe": self.probe,
+            "tree": self.tree.to_dict() if self.tree is not None else None,
         }
 
     @classmethod
@@ -120,6 +127,7 @@ class Question:
             forced=d.get("forced", False),
             subject=d.get("subject", ""),
             probe=d.get("probe", ""),
+            tree=Probe.from_dict(d["tree"]) if d.get("tree") else None,
         )
 
 

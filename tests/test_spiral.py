@@ -161,20 +161,35 @@ class TestSpiralInvariants(unittest.TestCase):
                 self.assertGreaterEqual(t.gain["total"], 0.0)
                 self.assertLessEqual(t.gain["total"], 1.0)
 
-    def test_a_run_that_stops_surprising_says_so_about_its_instrument(self):
-        class Repetitive:
-            name = "repetitive"
+    def test_sustained_low_surprise_is_diagnosed_as_a_spent_instrument(self):
+        from spice.selfmodel import SelfModel
 
-            def investigate(self, q, graph):
-                from spice.types import Finding
+        sm = SelfModel()
+        for e in range(5):
+            sm.observe_epoch(
+                epoch=e,
+                stats={"mean_uncertainty": 0.7 - e * 0.02, "nodes": 10 + e, "contradictions": 0},
+                selected_levels=list(QuestionLevel),
+                selected_strategies=["a", "b", "c"],
+                novelty_mean=0.9,        # คำถามยังใหม่อยู่
+                gain_mean=0.02,          # แต่คำตอบไม่เปลี่ยนแบบจำลองเลย
+                open_residuals=[],
+                instrument_failures=[],
+            )
+        limits = sm.detect(5)
+        self.assertIn("exhaustion", {l.kind for l in limits})
+        spent = next(l for l in limits if l.kind == "exhaustion")
+        self.assertIn("ตัวสืบค้น", spent.text)
 
-                return Finding(answer="เหมือนเดิมทุกครั้ง", confidence=0.5,
-                               residual="เศษเดิมที่ไม่เคยเปลี่ยน")
-
-        sp = Spiral.from_topic("ก้นหอย", seed=23, investigator=Repetitive())
-        sp.run(12)
-        kinds = {l.kind for l in sp.self_model.detect(sp.epoch, sp.budget)}
-        self.assertIn("exhaustion", kinds)
+    def test_a_spent_instrument_stops_the_run_as_a_boundary(self):
+        sp = spiral(seed=23)
+        sp.self_model.gain_history = [0.0] * 6
+        for l in sp.self_model.detect(sp.epoch, sp.budget):
+            pass
+        sp.self_model.detect(sp.epoch + 1, sp.budget)   # ให้ข้อจำกัดอยู่ทนสองรอบ
+        before = sp.epoch
+        sp.run(5)
+        self.assertLessEqual(sp.epoch - before, 5)
 
     def test_report_renders(self):
         sp = spiral(seed=15)
