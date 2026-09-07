@@ -1,0 +1,253 @@
+<title>ก้นหอยที่ไม่ต้องใช้ภาษา</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+<style>
+/* หน้าจอหอสังเกตการณ์ — เดียวกับตัวเครื่องมือ เพราะนี่คือรายงานจากเครื่องเดียวกัน */
+:root{
+  color-scheme: dark;
+  --ink:#0B0E1A; --ink-2:#111528; --panel:#141829;
+  --line:#262C4A; --line-soft:#1C2138;
+  --text:#E8E5DA; --muted:#8A90AD; --faint:#5A6081;
+  --amber:#F2A33C; --self:#4FD1C5; --violet:#9B8BD0; --crimson:#E5484D; --gold:#F2C14E;
+  --f-display:"Chakra Petch","IBM Plex Sans Thai",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans Thai","Noto Sans Thai",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ink);color:var(--text);font-family:var(--f-body);
+  font-size:15px;line-height:1.72;-webkit-font-smoothing:antialiased}
+.wrap{max-width:860px;margin:0 auto;padding:52px 24px 96px}
+.eyebrow{font-family:var(--f-display);font-size:11px;font-weight:700;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--amber)}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(30px,5.4vw,44px);
+  line-height:1.16;margin:10px 0 16px;text-wrap:balance}
+.lede{font-size:17px;line-height:1.68;margin:0 0 26px;color:var(--text)}
+.lede b{font-weight:600;color:var(--amber)}
+hr{border:0;border-top:1px solid var(--line);margin:46px 0}
+h2{font-family:var(--f-display);font-weight:700;font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--amber);margin:0 0 6px}
+h2+.sub{color:var(--muted);font-size:14px;margin:0 0 22px;line-height:1.62}
+code,.mono{font-family:var(--f-mono);font-size:13px}
+
+.raw{font-family:var(--f-mono);font-size:11.5px;line-height:1.9;color:var(--faint);
+  background:var(--ink-2);border:1px solid var(--line-soft);border-radius:3px;
+  padding:12px 14px;overflow-x:auto;white-space:nowrap;margin:0 0 8px}
+.note{font-size:13px;color:var(--muted);margin:0 0 26px}
+
+figure{margin:0 0 10px}
+canvas{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:3px;
+  background:var(--ink-2)}
+figcaption{font-size:13px;color:var(--muted);margin-top:9px;line-height:1.6}
+.legend{display:flex;flex-wrap:wrap;gap:7px 18px;margin:10px 0 0;font-size:12.5px;color:var(--muted);
+  font-family:var(--f-display);letter-spacing:.04em}
+.legend span{display:flex;align-items:center;gap:7px}
+.legend i{width:10px;height:10px;border-radius:2px;flex:none}
+
+table{width:100%;border-collapse:collapse;margin:0 0 6px;font-size:14.5px}
+th{font-family:var(--f-display);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--faint);text-align:left;padding:0 12px 8px 0;font-weight:700;border-bottom:1px solid var(--line)}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line-soft);vertical-align:baseline}
+td.n{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+td.hit{color:var(--self);font-weight:600}
+
+.vocab{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:1px;
+  background:var(--line-soft);border:1px solid var(--line-soft);border-radius:3px;overflow:hidden}
+.vocab div{background:var(--panel);padding:9px 11px}
+.vocab b{font-family:var(--f-mono);font-size:13px;color:var(--self);font-weight:500}
+.vocab span{display:block;font-size:12px;color:var(--faint);font-family:var(--f-display);
+  letter-spacing:.04em}
+
+.mint{display:grid;grid-template-columns:64px 1fr;gap:14px;padding:13px 0;
+  border-bottom:1px solid var(--line-soft);align-items:baseline}
+.mint:last-child{border-bottom:0}
+.mint .ep{font-family:var(--f-mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.mint .name{font-family:var(--f-mono);font-size:15px;color:var(--gold);font-weight:500}
+.mint .eq{font-family:var(--f-mono);font-size:13px;color:var(--muted)}
+.mint .s{font-size:13.5px;color:var(--muted);line-height:1.55;margin-top:4px}
+.mint.second{background:rgba(79,209,197,.05);border-left:2px solid var(--self);padding-left:12px;
+  margin-left:-14px}
+.mint.second .name{color:var(--self)}
+
+ul.shapes{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+ul.shapes li{font-family:var(--f-mono);font-size:12.5px;color:var(--text);
+  background:var(--ink-2);border:1px solid var(--line-soft);border-radius:3px;
+  padding:9px 12px;overflow-x:auto;white-space:nowrap}
+ul.shapes li em{font-style:normal;color:var(--self)}
+
+.q{padding:14px 0;border-bottom:1px solid var(--line-soft)}
+.q:last-child{border-bottom:0}
+.q .head{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-bottom:6px}
+.q .lv{font-family:var(--f-display);font-size:9.5px;font-weight:700;letter-spacing:.11em;
+  padding:1px 6px;border-radius:2px;border:1px solid currentColor;color:var(--violet)}
+.q .sh{font-family:var(--f-mono);font-size:11.5px;color:var(--faint)}
+.q .g{font-family:var(--f-mono);font-size:11.5px;color:var(--gold);margin-left:auto}
+.q .t{line-height:1.55}
+.q .r{margin-top:6px;padding-left:12px;border-left:1px solid var(--line);
+  color:var(--muted);font-size:13.5px}
+.q .r::before{content:"↯ ";color:var(--amber)}
+
+footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
+  font-size:13.5px;color:var(--muted);line-height:1.7}
+footer b{color:var(--text);font-weight:600}
+@media (max-width:600px){.wrap{padding:34px 16px 64px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+<div class="eyebrow">ก้นหอยคำถาม · รันบนโดเมนที่ไม่มีคำศัพท์</div>
+<h1>ก้นหอยที่ไม่ต้องใช้ภาษา</h1>
+<p class="lede">ป้อนตัวเลขดิบให้ชุดหนึ่ง ไม่มีคำอธิบาย ไม่มีชื่อเรียก ไม่มีแม่แบบประโยคสักอัน
+<b>คำถามถูกประกอบจากพีชคณิต ถูกประมวลผลเป็นการวัด และเศษที่เหลือคือตำแหน่งที่แบบจำลองทายผิดจริง ๆ</b>
+ระบบต้องตั้งชื่อทุกอย่างที่มันค้นพบเอง</p>
+
+<div class="raw" id="raw"></div>
+<p class="note">420 ตัว · นี่คือทุกอย่างที่ระบบได้รับ</p>
+
+<hr>
+
+<h2>สิ่งที่มันวัดได้เอง</h2>
+<p class="sub">แถวบนคือสัญญาณดิบ แถวกลางคือแบบจำลองคาบที่มันหาเจอ แถวล่างคือตำแหน่งที่แบบจำลองทายผิด
+— เศษเหล่านั้นถูกตั้งชื่อและกลายเป็นวัตถุของคำถามรอบถัดไป</p>
+<figure>
+  <canvas id="cv" width="1680" height="340"></canvas>
+  <figcaption>เส้นแดงตั้งคือจุดเปลี่ยนระบอบที่ระบบหาเจอ (ตำแหน่ง <span class="mono" id="cp"></span>)
+  — ของจริงอยู่ที่ <span class="mono" id="cpt"></span></figcaption>
+</figure>
+<div class="legend" id="lg"></div>
+
+<h2 style="margin-top:34px">เทียบกับสิ่งที่ซ่อนไว้จริง</h2>
+<p class="sub">ระบบไม่เคยเห็นฟังก์ชันที่สร้างลำดับนี้</p>
+<table>
+  <thead><tr><th>โครงสร้าง</th><th>ที่ซ่อนไว้จริง</th><th>ที่ระบบวัดได้เอง</th></tr></thead>
+  <tbody id="tb"></tbody>
+</table>
+
+<hr>
+
+<h2>คำศัพท์ที่มันผลิตขึ้นเอง</h2>
+<p class="sub">ไม่มีชื่อเรียกอะไรมาให้เลย ทุกชื่อในกราฟเป็นโทเคนที่ระบบสร้าง ไม่ได้ยืมจากภาษาใด
+ตัวเลขคือจำนวนตำแหน่งที่ชื่อนั้นครอบ</p>
+<div class="vocab" id="vc"></div>
+<p class="note" style="margin-top:10px">ทั้งหมด <span class="mono" id="vn"></span> ชื่อ</p>
+
+<hr>
+
+<h2>ไวยากรณ์ที่มันงอกขึ้นเอง</h2>
+<p class="sub">ภาษามนุษย์โตด้วย grammaticalization — การประกอบที่ใช้บ่อยและได้ผลจะถูกยุบเป็นหน่วยเดียว
+แล้วเอาไปประกอบต่อได้อีก ระบบทำอย่างนั้นเอง แปดครั้งใน 80 รอบ ชื่อทุกชื่อมันตั้งเอง</p>
+<div id="mt"></div>
+
+<h2 style="margin-top:34px">รูปคำถามที่ไม่มีใครเขียนไว้</h2>
+<p class="sub"><span class="mono" id="sn"></span> รูปที่มันประกอบขึ้นระหว่างทาง สีเขียวคือส่วนที่ใช้หน่วยซึ่งงอกเอง</p>
+<ul class="shapes" id="sh"></ul>
+
+<hr>
+
+<h2>ตัวอย่างคำถามจริง</h2>
+<p class="sub">ผิวภาษาไทยถูก render ทีหลังเพื่อให้มนุษย์อ่านได้ ต้นไม้ทำงานได้โดยไม่มีผิว</p>
+<div id="qs"></div>
+
+<footer>
+  <p><b>ทำไมอันนี้ต่างจากรันก่อนหน้า</b> — ที่ผ่านมาข้อจำกัดใหญ่สุดคือระบบไม่รู้อะไรเลย
+  ตัวสืบค้นเป็นตัวจำลอง ไม่ใช่ตัวรู้ ที่นี่ไม่เป็นอย่างนั้น: คำถามถูกประมวลผลเป็นการวัดจริงบนลำดับ
+  คำตอบคือสิ่งที่วัดได้ และเศษไม่ใช่วลีที่ใครแต่ง แต่คือเซ็ตของตำแหน่งที่ทายผิด</p>
+  <p><b>สิ่งที่ยังทำไม่ได้</b> — ไวยากรณ์ที่มันงอกยังตั้งอยู่บนตัวดำเนินการฐาน 15 ตัวที่มนุษย์เขียน
+  มันประกอบและหลอมหน่วยใหม่ได้ไม่จำกัด แต่ยังไม่ได้ประดิษฐ์ตัวดำเนินการฐานขึ้นจากศูนย์
+  และการวัดที่มีอยู่ก็จำกัดอยู่ที่คาบ บล็อกซ้ำ เอนโทรปี และสมมาตร — โครงสร้างชนิดอื่นมันยังมองไม่เห็น</p>
+</footer>
+</div>
+
+<script>
+"use strict";
+const D = {"seq": [3, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 3, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 3, 3, 1, 0, 1, 1, 0, 0, 2, 1, 0, 1, 1, 2, 3, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 3, 0, 2, 1, 0, 1, 1, 3, 0, 2, 1, 0, 1, 3, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 3, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 3, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 3, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 3, 2, 1, 0, 2, 1, 2, 0, 2, 1, 0, 1, 1, 3, 0, 2, 1, 0, 1, 1, 2, 0, 2, 0, 0, 1, 3, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 3, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 3, 1, 1, 2, 0, 2, 1, 0, 0, 1, 2, 0, 2, 3, 0, 1, 2, 2, 0, 2, 1, 0, 1, 1, 2, 0, 3, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 3, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 1, 3, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 1, 3, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 3, 1, 2, 1, 2, 2, 0, 1, 1, 2, 2, 2, 1, 3, 1, 2, 2, 0, 2, 1, 2, 1, 1, 2, 0, 2, 3, 0, 1, 1, 2, 0, 2, 1, 0, 2, 1, 2, 0, 3, 2, 0, 1, 1, 2, 2, 2, 0, 0, 2, 2, 2, 3, 2, 1, 2, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 2, 1, 2, 0, 2, 2, 0, 1, 3, 2, 2, 3, 0, 0, 1, 2, 2, 0, 2, 1, 2, 3, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 3, 2, 1, 1, 0, 2, 2, 0, 1, 1, 2, 2, 2, 3, 0, 1, 2, 2, 0, 2, 1, 2, 1, 1, 2, 0, 2, 1, 0, 1, 1, 2, 0, 2, 1, 0, 2, 1, 2, 3, 2, 2, 0, 1, 1, 2, 2, 2, 1, 1, 1, 2, 3, 0, 2, 1], "residual": [0, 13, 25, 26, 31, 39, 52, 59, 65, 78, 91, 104, 130, 134, 143, 153, 156, 169, 182, 190, 195, 198, 208, 221, 234, 247, 260, 263, 265, 270, 273, 275, 280, 286, 295, 299, 300, 305, 307, 309, 310, 312, 315, 330, 335, 338, 340, 341, 342, 345, 350, 351, 364, 365, 367, 370, 375, 377, 380, 385, 400, 403, 405, 410, 413, 415, 416], "found": {"period": 7, "accuracy": 0.84, "changepoint": 260, "alphabet": 4, "entropy": 1.842, "max_entropy": 2.0}, "truth": {"period": 7, "overlay": 13, "regime_at": 260, "noise": 0.04, "alphabet": 4}, "vocab": [{"name": "⟦karuru⟧", "n": 420, "origin": "root"}, {"name": "⟦moun⟧", "n": 67, "origin": "mechanism-residual"}, {"name": "⟦tataphe⟧", "n": 353, "origin": "mechanism-explained"}, {"name": "⟦kaphe⟧", "n": 23, "origin": "mechanism-residual"}, {"name": "⟦vodrovo⟧", "n": 44, "origin": "mechanism-explained"}, {"name": "⟦zaneza⟧", "n": 160, "origin": "bound-residual"}, {"name": "⟦zataka⟧", "n": 260, "origin": "bound-explained"}, {"name": "⟦neline⟧", "n": 285, "origin": "decompose-residual"}, {"name": "⟦vozamo⟧", "n": 135, "origin": "decompose-explained"}, {"name": "⟦shishi⟧", "n": 14, "origin": "mechanism-residual"}, {"name": "⟦nemo⟧", "n": 30, "origin": "mechanism-explained"}, {"name": "⟦zane⟧", "n": 6, "origin": "mechanism-residual"}], "vocab_n": 64, "mints": [{"epoch": 26, "coined": "kadro", "outer": "reflect", "inner": "compare", "level": 3, "surface": "เกณฑ์อะไรที่ทำให้เรานับว่าคำตอบของ การเทียบระหว่าง {0} กับ {1} เป็นคำอธิบายที่ใช้ได้?"}, {"epoch": 39, "coined": "moli", "outer": "reflect", "inner": "reflect", "level": 4, "surface": "เกณฑ์อะไรที่ทำให้เรานับว่าคำตอบของ เกณฑ์ที่ใช้ตัดสิน{0} เป็นคำอธิบายที่ใช้ได้?"}, {"epoch": 45, "coined": "unrushi", "outer": "origin", "inner": "reflect", "level": 4, "surface": "คำถาม เกณฑ์ที่ใช้ตัดสิน{0} มาจากวิธีมองแบบไหน และวิธีมองนั้นตัดอะไรทิ้งไปบ้าง?"}, {"epoch": 50, "coined": "rumomo", "outer": "reflect", "inner": "extent", "level": 3, "surface": "เกณฑ์อะไรที่ทำให้เรานับว่าคำตอบของ ขนาดและหน่วยวัดของ {0} เป็นคำอธิบายที่ใช้ได้?"}, {"epoch": 53, "coined": "phedroli", "outer": "reflect", "inner": "reflect", "level": 4, "surface": "เกณฑ์อะไรที่ทำให้เรานับว่าคำตอบของ เกณฑ์ที่ใช้ตัดสิน{0} เป็นคำอธิบายที่ใช้ได้?"}, {"epoch": 67, "coined": "tata", "outer": "condition", "inner": "negate", "level": 2, "surface": "สิ่งที่ยังจริงอยู่ถ้า {0} ไม่จริง ต้องการอะไรจึงจะเกิดได้ และเงื่อนไขไหนที่ขาดไม่ได้จริง ๆ?"}, {"epoch": 68, "coined": "nene", "outer": "decompose", "inner": "reflect", "level": 0, "surface": "ถ้าถอด เกณฑ์ที่ใช้ตัดสิน{0} ออกเป็นชิ้นส่วน ชิ้นไหนที่ขาดไม่ได้?"}, {"epoch": 75, "coined": "zaneun", "outer": "origin", "inner": "reflect~compare", "level": 4, "surface": "คำถาม เกณฑ์ที่ใช้ตัดสินการเทียบระหว่าง {0} กับ {1} มาจากวิธีมองแบบไหน และวิธีมองนั้นตัดอะไรทิ้งไปบ้าง?"}], "deep": ["reflect~reflect(compare(origin(invariant(·)),origin(extent(·))))", "compare(origin~reflect(decompose(·)),decompose~reflect(compare(·,·)))", "reflect~compare(limit(bound(·)),origin(invariant(·)))", "tension(tension(bound(·),·),invariant(condition(·)))", "compare(limit(origin(compare(·,·))),condition(·))", "compare(reflect(extent(·)),negate(decompose(·)))", "origin(compare(·,bridge(extent(·),identify(·))))", "origin~reflect(reflect~reflect(reflect~reflect(compare(·,·))))"], "minted_shapes": ["decompose(bridge(reflect~compare(·,·),mechanism(·)))", "reflect~compare(limit(bound(·)),origin(invariant(·)))", "origin~reflect(reflect~reflect(reflect~reflect(compare(·,·))))", "reflect~reflect(reflect~reflect(decompose(reflect~extent(·))))", "reflect~reflect(compare(origin(invariant(·)),origin(extent(·))))", "compare(origin~reflect(decompose(·)),decompose~reflect(compare(·,·)))"], "picked": [{"epoch": 35, "lv": "ภววิทยา", "text": "ขอบเขตของ เกณฑ์ที่ใช้ตัดสินเกณฑ์ที่ใช้ตัดสินขนาดและหน่วยวัดของ ⟦phevota⟧ สิ้นสุดตรงไหน และอะไรอยู่นอกขอบนั้น?", "shape": "bound(reflect(reflect(extent(·))))", "answer": "⟦phevota⟧: ขอบที่ตำแหน่ง 24 — ซ้ายคาบ 8 แม่น 0.792 ขวาคาบ 2 แม่น 0.5", "residual": "⟦pherugi⟧", "gain": 0.765}, {"epoch": 57, "lv": "ข้อสมมติ", "text": "ถ้าถอด สิ่งที่ยังจริงอยู่ถ้า ⟦kane⟧ ไม่จริง ออกเป็นชิ้นส่วน ชิ้นไหนที่ขาดไม่ได้?", "shape": "decompose(negate(·))", "answer": "⟦kane⟧: บล็อกที่ซ้ำบ่อยสุด [2, 3] ปรากฏ 9 ครั้ง ครอบ 0.562 ของทั้งหมด", "residual": "⟦phedro⟧", "gain": 0.765}, {"epoch": 29, "lv": "กลไก", "text": "กลไกอะไรที่ทำให้ ⟦gine⟧ เกิดขึ้น และกลไกนั้นต้องการเงื่อนไขอะไรบ้าง?", "shape": "mechanism(·)", "answer": "⟦gine⟧: แบบจำลองคาบ 29 ทายถูก 0.63 ใช้ 279.8 บิตอธิบาย", "residual": "⟦zaun⟧", "gain": 0.753}, {"epoch": 0, "lv": "กลไก", "text": "อะไรเชื่อม ⟦karuru⟧ กับ ⟦karuru⟧ เข้าด้วยกัน ทั้งที่ยังไม่มีใครลากเส้น?", "shape": "bridge(·,·)", "answer": "⟦karuru⟧: ⟦karuru⟧ ใช้ 1.423 บิต/สัญลักษณ์ · ⟦karuru⟧ ใช้ 1.423 — ที่ถูกกว่าคือ ⟦karuru⟧", "residual": "สิ่งที่การเทียบด้วยจำนวนบิตมองไม่เห็น", "gain": 0.682}, {"epoch": 57, "lv": "ข้อสมมติ", "text": "สิ่งที่ยังจริงอยู่ถ้า ขอบเขตของ ขนาดและหน่วยวัดของ ⟦zaun⟧ ไม่จริง ต้องการอะไรจึงจะเกิดได้ และเงื่อนไขไหนที่ขาดไม่ได้จริง ๆ?", "shape": "condition(negate(bound(extent(·))))", "answer": "⟦zaun⟧: แบบจำลองคาบ 6 ทายถูก 0.647 ใช้ 73.0 บิตอธิบาย", "residual": "⟦pheun⟧", "gain": 0.617}, {"epoch": 16, "lv": "ภววิทยา", "text": "คำถาม «ขอบเขตของ ⟦zane⟧» มาจากวิธีมองแบบไหน และวิธีมองนั้นตัดอะไรทิ้งไปบ้าง?", "shape": "origin(bound(·))", "answer": "⟦zane⟧: เกณฑ์แม่นยำเลือกคาบ 2 เกณฑ์สั้นที่สุดเลือกคาบ 2 — ขัดกัน False", "residual": "เกณฑ์ที่สามที่ไม่ใช่ทั้งความแม่นและความสั้น", "gain": 0.56}], "grammar": {"vocabulary": 22, "base": 15, "minted": 7, "shapes": 179, "generation": 8, "baseline": 0.2475, "mint_bar": 0.3589}, "epochs": 80, "shapes_n": 179, "questions_n": 224};
+
+const SYM = ["#8A90AD", "#F2A33C", "#4FD1C5", "#9B8BD0"];
+document.getElementById("raw").textContent = D.seq.slice(0, 120).join(" ") + " …";
+document.getElementById("cp").textContent = D.found.changepoint;
+document.getElementById("cpt").textContent = D.truth.regime_at;
+document.getElementById("vn").textContent = D.vocab_n;
+document.getElementById("sn").textContent = D.shapes_n;
+
+document.getElementById("lg").innerHTML =
+  SYM.map((c, i) => `<span><i style="background:${c}"></i>สัญลักษณ์ ${i}</span>`).join("") +
+  `<span><i style="background:#E5484D"></i>ตำแหน่งที่แบบจำลองทายผิด</span>`;
+
+/* ── ภาพสัญญาณ: ดิบ / แบบจำลอง / เศษ ───────────────────────── */
+(function draw(){
+  const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+  const n = D.seq.length, W = cv.width, H = cv.height;
+  const w = W / n, rowH = 74, gap = 40, top = 26;
+  const p = D.found.period;
+  // แบบจำลอง: สัญลักษณ์ที่พบบ่อยที่สุดของแต่ละเฟส
+  const phase = {};
+  D.seq.forEach((x, i) => { (phase[i % p] = phase[i % p] || {})[x] = (phase[i % p][x] || 0) + 1; });
+  const model = {};
+  for (const k in phase) model[k] = +Object.keys(phase[k]).reduce((a, b) => phase[k][a] > phase[k][b] ? a : b);
+  const resid = new Set(D.residual);
+
+  ctx.clearRect(0, 0, W, H);
+  const labels = ["สัญญาณดิบ", "แบบจำลองคาบ " + p, "เศษที่อธิบายไม่ได้"];
+  for (let r = 0; r < 3; r++){
+    const y = top + r * (rowH + gap);
+    for (let i = 0; i < n; i++){
+      let col;
+      if (r === 0) col = SYM[D.seq[i] % 4];
+      else if (r === 1) col = SYM[model[i % p] % 4];
+      else col = resid.has(i) ? "#E5484D" : "rgba(90,96,129,.16)";
+      ctx.fillStyle = col;
+      ctx.fillRect(i * w, y, Math.max(w - 0.4, 0.7), rowH);
+    }
+    ctx.font = '700 15px "Chakra Petch",sans-serif';
+    ctx.fillStyle = "rgba(232,229,218,.86)";
+    ctx.textAlign = "left";
+    ctx.fillText(labels[r], 4, y - 11);
+  }
+  // จุดเปลี่ยนระบอบ
+  const cx = D.found.changepoint * w;
+  ctx.strokeStyle = "#E5484D"; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
+  ctx.beginPath(); ctx.moveTo(cx, 2); ctx.lineTo(cx, H - 2); ctx.stroke();
+  ctx.setLineDash([]);
+})();
+
+/* ── ตาราง ─────────────────────────────────────────────────── */
+document.getElementById("tb").innerHTML = [
+  ["คาบพื้นฐาน", D.truth.period, D.found.period + " (ทายถูก " + Math.round(D.found.accuracy * 100) + "%)", true],
+  ["จุดเปลี่ยนระบอบ", "ตำแหน่ง " + D.truth.regime_at, "ตำแหน่ง " + D.found.changepoint, D.found.changepoint === D.truth.regime_at],
+  ["จำนวนสัญลักษณ์", D.truth.alphabet, D.found.alphabet, D.found.alphabet === D.truth.alphabet],
+  ["ความไม่แน่นอน", "—", D.found.entropy + " จากเพดาน " + D.found.max_entropy, false],
+].map(r => `<tr><td>${r[0]}</td><td class="n">${r[1]}</td><td class="n ${r[3] ? "hit" : ""}">${r[2]}</td></tr>`).join("");
+
+/* ── คำศัพท์ ───────────────────────────────────────────────── */
+const ORI = { root:"ราก", "mechanism-residual":"เศษของแบบจำลองคาบ", "mechanism-explained":"ส่วนที่คาบอธิบายได้",
+  "decompose-residual":"เศษของการแตกบล็อก", "decompose-explained":"ส่วนที่บล็อกครอบ",
+  "bound-residual":"อีกฝั่งของขอบ", "bound-explained":"ฝั่งในของขอบ" };
+document.getElementById("vc").innerHTML = D.vocab.map(v =>
+  `<div><b>${v.name}</b><span>${v.n} ตำแหน่ง · ${ORI[v.origin] || v.origin}</span></div>`).join("");
+
+/* ── หน่วยไวยากรณ์ที่งอกเอง ────────────────────────────────── */
+const mintedKeys = new Set(D.mints.map(m => m.outer + "~" + m.inner));
+document.getElementById("mt").innerHTML = D.mints.map(m => {
+  const second = m.inner.includes("~");
+  return `<div class="mint${second ? " second" : ""}">
+    <div class="ep">รอบ ${m.epoch}</div>
+    <div><span class="name">«${m.coined}»</span>
+      <span class="eq"> = ${m.outer} ∘ ${m.inner}</span>
+      ${second ? '<span class="eq" style="color:var(--self)"> ← หลอมจากหน่วยที่งอกไว้ก่อนหน้า</span>' : ""}
+      <div class="s">${m.surface}</div></div></div>`;
+}).join("");
+
+/* ── รูปคำถาม ──────────────────────────────────────────────── */
+const mark = s => s.replace(/([a-z]+~[a-z~]+)/g, '<em>$1</em>');
+document.getElementById("sh").innerHTML =
+  D.minted_shapes.concat(D.deep.slice(0, 4)).map(s => `<li>${mark(s)}</li>`).join("");
+
+/* ── คำถามจริง ─────────────────────────────────────────────── */
+document.getElementById("qs").innerHTML = D.picked.map(q => `
+  <div class="q">
+    <div class="head"><span class="lv">${q.lv}</span>
+      <span class="sh">${mark(q.shape)}</span>
+      <span class="g">ประหลาดใจ ${q.gain}</span></div>
+    <div class="t">${q.text}</div>
+    <div class="r">${q.residual}</div>
+  </div>`).join("");
+</script>
