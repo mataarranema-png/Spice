@@ -143,6 +143,12 @@ TENSION = _op(OpSpec("tension", 2, Kind.EITHER, 2, 0,
     ("{0} and {1} conflict — under what conditions could both hold?",),
     nom_th="ความขัดแย้งระหว่าง {0} กับ {1}"))
 
+SYNTHESIZE = _op(OpSpec("synthesize", 1, Kind.EITHER, 1, 0,
+    ("มีโครงสร้างแบบไหนใน {0} ที่เครื่องมือชุดปัจจุบันยังมองไม่เห็น?",
+     "ถ้าต้องประดิษฐ์การวัดขึ้นใหม่เพื่อ {0} มันจะมีรูปแบบไหน?"),
+    ("What structure in {0} is invisible to the current instruments?",),
+    nom_th="โครงสร้างที่ยังไม่มีเครื่องมือใดเห็นใน {0}"))
+
 # ── ตัวยกระดับ: รับได้เฉพาะคำถามอื่น ระดับจึงงอกจากรูป ไม่ใช่จากการประกาศ ──
 REFLECT = _op(OpSpec("reflect", 1, Kind.PROBE, 0, 1,
     ("เกณฑ์อะไรที่ทำให้เรานับว่าคำตอบของ «{0}» เป็นคำอธิบายที่ใช้ได้?",

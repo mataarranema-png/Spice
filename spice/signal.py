@@ -18,6 +18,8 @@ import math
 import random
 from dataclasses import dataclass, field
 
+from .synth import Fit, Workshop, fit as fit_key, search
+
 _SYLL = ("ka", "ru", "mo", "shi", "ta", "ne", "vo", "li", "za", "phe", "dro", "un", "gi")
 
 
@@ -68,6 +70,7 @@ class SignalDomain:
         self._coined: set[str] = set()
         self.root = Selection(self.coin(), tuple(range(len(self.seq))), "root")
         self.selections: dict[str, Selection] = {self.root.name: self.root}
+        self.workshop = Workshop(self.coin)
 
     # ---------------- คำศัพท์ที่ระบบผลิตเอง ----------------
 
@@ -266,6 +269,47 @@ class SignalDomain:
             explained=(), residual_idx=(), bits=0.0,
         )
 
+    def synthesize(self, sel: Selection) -> Measurement:
+        """ประดิษฐ์การวัดขึ้นใหม่สำหรับวัตถุนี้ แทนที่จะใช้ของที่มีอยู่.
+
+        ค้นหาในปริภูมิของโปรแกรม แล้วเทียบกับเครื่องมือเดิม (ตัวตรวจจับคาบ)
+        ถ้าของใหม่อธิบายได้ถูกกว่าอย่างมีนัย มันจะถูกเสนอเข้าโรงหลอมเพื่อ
+        *เลื่อนขั้นเป็นตัวดำเนินการฐาน*
+        """
+        found = search(self.seq, sel.idx)
+        if not found:
+            return Measurement("synthesize", {"reason": "ข้อมูลน้อยเกินกว่าจะค้นหา"}, (), sel.idx)
+        best = found[0]
+        baseline = self.mechanism(sel)
+        base_bps = baseline.bits / max(1, len(sel))
+        return Measurement(
+            "synthesize",
+            {"program": str(best.key), "accuracy": round(best.accuracy, 3),
+             "bits_per_symbol": round(best.bits_per_symbol, 3),
+             "baseline_program": f"i%{baseline.value.get('period', '?')}",
+             "baseline_bits_per_symbol": round(base_bps, 3),
+             "beats_baseline": best.bits_per_symbol < base_bps},
+            explained=best.hits,
+            residual_idx=best.misses,
+            bits=best.bits,
+        )
+
+    def apply_invented(self, sel: Selection, op_key: str) -> Measurement | None:
+        """ใช้ตัวดำเนินการที่ระบบประดิษฐ์ขึ้นเอง."""
+        inv = self.workshop.get(op_key)
+        if inv is None:
+            return None
+        f = fit_key(self.seq, sel.idx, inv.key)
+        if f is None:
+            return Measurement("invented", {"reason": "ใช้กับวัตถุนี้ไม่ได้"}, (), sel.idx)
+        inv.uses += 1
+        return Measurement(
+            "invented",
+            {"coined": inv.coined, "program": inv.key_str,
+             "accuracy": round(f.accuracy, 3), "bits_per_symbol": round(f.bits_per_symbol, 3)},
+            explained=f.hits, residual_idx=f.misses, bits=f.bits,
+        )
+
     # ---------------- ภายใน ----------------
 
     @staticmethod
@@ -281,6 +325,31 @@ class SignalDomain:
             if acc > best[1]:
                 best = (p, acc)
         return best
+
+
+def context_signal(n: int = 400, seed: int = 5, noise: float = 0.06) -> list[int]:
+    """สัญญาณที่ตัวตรวจจับคาบ *มองไม่เห็นเลย*.
+
+    ค่าถัดไปถูกกำหนดโดยสองค่าก่อนหน้าผ่านตารางสุ่ม บวกสัญญาณรบกวนเป็นระยะ
+    สัญญาณรบกวนไม่ได้แค่ทำให้ค่าเพี้ยนไปหนึ่งตำแหน่ง แต่ *ผลักวิถีทั้งเส้น
+    ไปเฟสใหม่* ทำให้ `i % p` พังยับ ในขณะที่กฎ "ดูสองค่าก่อนหน้า" ยังใช้ได้
+    เกือบสมบูรณ์
+
+    ก่อนหน้านี้ระบบมองโครงสร้างแบบนี้ไม่เห็นเลย เพราะการวัดทุกแบบที่มีถูก
+    เขียนไว้ล่วงหน้าและไม่มีอันไหนดูบริบท.
+    """
+    rng = random.Random(seed)
+    alpha = 4
+    table = {
+        (a, b): rng.randrange(alpha) for a in range(alpha) for b in range(alpha)
+    }
+    out = [rng.randrange(alpha), rng.randrange(alpha)]
+    for _ in range(n - 2):
+        nxt = table[(out[-2], out[-1])]
+        if rng.random() < noise:
+            nxt = rng.randrange(alpha)
+        out.append(nxt)
+    return out
 
 
 def layered_signal(n: int = 420, seed: int = 11) -> list[int]:
@@ -324,6 +393,7 @@ _DISPATCH = {
     "compare": "compare",
     "bridge": "compare",
     "tension": "compare",
+    "synthesize": "synthesize",
 }
 
 _SUMMARY = {
@@ -335,6 +405,9 @@ _SUMMARY = {
     "decompose": "บล็อกที่ซ้ำบ่อยสุด {block} ปรากฏ {occurrences} ครั้ง ครอบ {coverage} ของทั้งหมด",
     "compare": "{a} ใช้ {bits_per_symbol_a} บิต/สัญลักษณ์ · {b} ใช้ {bits_per_symbol_b} — ที่ถูกกว่าคือ {cheaper_to_describe}",
     "reflect": "เกณฑ์แม่นยำเลือกคาบ {most_accurate_period} เกณฑ์สั้นที่สุดเลือกคาบ {shortest_period} — ขัดกัน {criteria_disagree}",
+    "synthesize": "ประดิษฐ์การวัด {program} ทายถูก {accuracy} ใช้ {bits_per_symbol} บิต/สัญลักษณ์ "
+                  "(ของเดิม {baseline_program} ใช้ {baseline_bits_per_symbol}) — ดีกว่า {beats_baseline}",
+    "invented": "ใช้ «{coined}» ({program}) ทายถูก {accuracy} ใช้ {bits_per_symbol} บิต/สัญลักษณ์",
 }
 
 
@@ -351,6 +424,7 @@ class SignalInvestigator:
     def __init__(self, domain: "SignalDomain") -> None:
         self.domain = domain
         self.failures: list[str] = []
+        self.promoted: list = []               # ตัวดำเนินการฐานที่ถูกประดิษฐ์ขึ้นระหว่างทาง
         self._periods: dict[str, int] = {}     # ไว้จับความขัดแย้งระหว่างการวัด
 
     # ------------------------------------------------------------------
@@ -372,11 +446,33 @@ class SignalInvestigator:
         base_op = op.split("~")[-1]            # หน่วยที่งอกใหม่ใช้ตัวในเป็นตัวจริง
         kind = _DISPATCH.get(base_op, "mechanism")
 
-        if kind == "compare":
+        if op.startswith("synth::"):
+            m = d.apply_invented(sel, op) or d.mechanism(sel)
+            kind = "invented"
+        elif kind == "compare":
             other = self._second(q, graph) or d.root
             m = d.compare(sel, other)
+        elif kind == "synthesize":
+            m = d.synthesize(sel)
+            # เสนอผลการค้นหาเข้าโรงหลอม — ถ้ามันพิสูจน์ตัวเองพอ จะได้เลื่อนขั้น
+            found = search(d.seq, sel.idx)
+            if found and m.value.get("baseline_bits_per_symbol"):
+                inv = d.workshop.consider(
+                    found[0], m.value["baseline_bits_per_symbol"], q.epoch
+                )
+                if inv is not None:
+                    self.promoted.append(inv)
+                    m.value["promoted_to_operator"] = inv.coined
         else:
             m = getattr(d, kind)(sel)
+
+        # เครื่องมือเดิมทำได้แย่กับวัตถุนี้ = สัญญาณว่าต้องประดิษฐ์เครื่องมือใหม่
+        # การประดิษฐ์จึงถูกกระตุ้นด้วย *ความล้มเหลวของเครื่องมือเดิม* ไม่ใช่ด้วย
+        # การสุ่มหยิบตัวดำเนินการมาใช้
+        # ประตูที่ 0.82 แคบเกินไป — สัญญาณทดสอบที่มีโครงสร้างซ้อนได้ 0.84 พอดี
+        # จึงไม่เคยกระตุ้นการประดิษฐ์เลย ทั้งที่ยังเหลืออีก 16% ที่อธิบายไม่ได้
+        if kind == "mechanism" and m.value.get("accuracy", 1.0) < 0.92:
+            self._try_invent(sel, m, q.epoch)
 
         nodes: list[NodeSpec] = []
         edges: list[EdgeSpec] = []
@@ -445,6 +541,16 @@ class SignalInvestigator:
         )
 
     # ------------------------------------------------------------------
+
+    def _try_invent(self, sel, baseline: "Measurement", epoch: int) -> None:
+        """ค้นหาการวัดที่ดีกว่า และเสนอเข้าโรงหลอมถ้ามันชนะจริง."""
+        found = search(self.domain.seq, sel.idx)
+        if not found:
+            return
+        base_bps = baseline.bits / max(1, len(sel))
+        inv = self.domain.workshop.consider(found[0], base_bps, epoch)
+        if inv is not None:
+            self.promoted.append(inv)
 
     def _resolve(self, q, graph):
         for tid in q.targets:

@@ -81,6 +81,7 @@ class EpochRecord:
     evolution: str = ""
     saturated: bool = False
     minted: str | None = None      # หน่วยไวยากรณ์ที่งอกในรอบนี้
+    invented: list = field(default_factory=list)   # ตัวดำเนินการฐานที่ประดิษฐ์ในรอบนี้
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +98,7 @@ class EpochRecord:
             "evolution": self.evolution,
             "saturated": self.saturated,
             "minted": self.minted,
+            "invented": list(self.invented),
         }
 
 
@@ -131,6 +133,7 @@ class Spiral:
         self.focus: str | None = None       # ย่านที่กำลังขุดอยู่ (node id)
         self._last_migration = -MIGRATION_COOLDOWN
         self._thin_epochs = 0               # รอบติดกันที่ถามได้ไม่ครบโควตา
+        self._seen_promoted: list = []
         self._proposed: list[Scored] = []    # รอบที่เปิดค้างไว้รอคำตอบจากภายนอก
         self._pending_record: EpochRecord | None = None
 
@@ -235,6 +238,23 @@ class Spiral:
         for t in turns:
             if t.question.tree is not None:
                 self.grammar.observe(t.question.tree, t.gain.get("total", 0.0))
+        promoted = list(getattr(self.investigator, "promoted", ()) or ())
+        if len(promoted) > len(getattr(self, "_seen_promoted", [])):
+            fresh = promoted[len(getattr(self, "_seen_promoted", [])) :]
+            self._seen_promoted = promoted
+            rec.invented = [i.coined for i in fresh]
+            for i in fresh:
+                self.grammar.adopt(i.op_key)
+                self.graph.add_node(
+                    f"ตัวดำเนินการที่ประดิษฐ์ขึ้น: {i.coined} = {i.key_str}",
+                    status=EpistemicStatus.PARTIALLY_KNOWN,
+                    confidence=round(i.accuracy, 2),
+                    level=QuestionLevel.SELF_REFERENCE,
+                    tags=("self", "instrument"),
+                    provenance="workshop",
+                    epoch=self.epoch,
+                )
+
         minted = self.grammar.mint(self.epoch)
         if minted is not None:
             rec.minted = minted.key
@@ -645,6 +665,8 @@ class Spiral:
                 lines.append(f"  ⇢ อพยพย่าน: {rec.migrated}")
             if rec.minted:
                 lines.append(f"  ✦ ไวยากรณ์งอกหน่วยใหม่: {rec.minted}")
+            for name in rec.invented:
+                lines.append(f"  ⚒ ประดิษฐ์ตัวดำเนินการฐานใหม่: «{name}»")
             for t in rec.turns:
                 lines.append(f"  [{t.question.level.th}] {t.question.text}")
                 lines.append(f"    → {t.answer}")

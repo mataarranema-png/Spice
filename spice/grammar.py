@@ -88,6 +88,7 @@ class Grammar:
         self.pairs: dict[tuple[str, str], PairStat] = {}
         self.minted: dict[str, Minted] = {}
         self.shapes_seen: set[str] = set()
+        self.adopted: set[str] = set()   # ตัวดำเนินการที่ *รันนี้* ประดิษฐ์ขึ้น
         self.generation = 0
         self.baseline = 0.0        # ความประหลาดใจเฉลี่ยที่รันนี้ทำได้จริง
         self._observations = 0
@@ -96,7 +97,20 @@ class Grammar:
 
     @property
     def vocabulary(self) -> tuple[str, ...]:
-        return tuple(k for k in known_ops() if k in BASE_OPS or k in self.minted)
+        """คำศัพท์ที่ใช้ได้ตอนนี้ = ตัวฐานที่มนุษย์เขียน + ที่หลอมเอง
+        + **ที่ประดิษฐ์ขึ้นจากการค้นหาโปรแกรม** (`synth::`)
+
+        ข้อสุดท้ายสำคัญ: ถ้าไม่นับรวม ตัวดำเนินการที่ระบบประดิษฐ์ขึ้นจะถูก
+        จดทะเบียนไว้เฉย ๆ โดยไม่มีวันถูกเอาไปประกอบเป็นคำถามเลยสักครั้ง
+
+        และต้องนับเฉพาะที่ *รันนี้* รับมา ไม่ใช่ทุกตัวที่จดทะเบียนไว้ในโปรเซส —
+        ทะเบียนตัวดำเนินการเป็นสถานะระดับโมดูล การนับทั้งหมดทำให้สิ่งที่รันก่อน
+        หน้าประดิษฐ์ไว้ไหลข้ามมาโผล่ในรันถัดไป ทั้งที่รันนั้นไม่ได้ค้นพบอะไรเลย
+        """
+        return tuple(
+            k for k in known_ops()
+            if k in BASE_OPS or k in self.minted or k in self.adopted
+        )
 
     def _fits(self, s: OpSpec, arg) -> bool:
         if s.kind is Kind.PROBE:
@@ -196,6 +210,11 @@ class Grammar:
         """
         return max(MINT_FLOOR, self.baseline * MINT_RATIO)
 
+    def adopt(self, op_key: str) -> None:
+        """รับตัวดำเนินการที่เพิ่งถูกประดิษฐ์ขึ้นเข้าคำศัพท์ของรันนี้."""
+        if spec(op_key) is not None:
+            self.adopted.add(op_key)
+
     def observe(self, p: Probe, gain: float) -> None:
         """จดว่าการประกอบแต่ละคู่ในคำถามนี้ให้ผลเท่าไร."""
         self.shapes_seen.add(p.shape)
@@ -288,6 +307,7 @@ class Grammar:
             "vocabulary": len(self.vocabulary),
             "base": len(BASE_OPS),
             "minted": len(self.minted),
+            "invented": len(self.adopted),
             "shapes": len(self.shapes_seen),
             "generation": self.generation,
             "baseline": round(self.baseline, 4),
@@ -301,6 +321,7 @@ class Grammar:
                 for (o, i), st in self.pairs.items()
             ],
             "minted": [m.to_dict() for m in self.minted.values()],
+            "adopted": sorted(self.adopted),
             "shapes_seen": sorted(self.shapes_seen)[:400],
             "generation": self.generation,
             "baseline": self.baseline,
@@ -319,6 +340,7 @@ class Grammar:
             g.minted[m.key] = m
             g._reregister(m)
         g.shapes_seen = set(d.get("shapes_seen", ()))
+        g.adopted = {k for k in d.get("adopted", ()) if spec(k) is not None}
         g.generation = d.get("generation", 0)
         g.baseline = d.get("baseline", 0.0)
         g._observations = d.get("observations", 0)
