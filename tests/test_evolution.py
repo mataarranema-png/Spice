@@ -4,7 +4,7 @@ import unittest
 from spice.evolution import W_CEIL, W_FLOOR, RETIRE_BELOW, Population, _clamp
 from spice.scoring import Weights
 from spice.selfmodel import CapabilityGap
-from spice.strategies import builtin_strategies
+from spice.strategies import Strategy, builtin_strategies
 from spice.types import QuestionLevel
 
 
@@ -71,19 +71,47 @@ class TestPopulation(unittest.TestCase):
                 self.assertLessEqual(term, W_CEIL)
             self.assertAlmostEqual(c.u + c.c + c.n, 1.0, places=6)
 
-    def test_a_never_used_strategy_is_eventually_retired(self):
-        pop = Population(rng=random.Random(17), max_size=40)
-        pop.strategies["ตัวที่ไม่มีใครเรียกใช้"] = builtin_strategies()[0].__class__(
-            name="ตัวที่ไม่มีใครเรียกใช้",
-            level=QuestionLevel.OBJECT,
-            source="frontier",
-            templates={"th": ["{a}?"]},
-            born_epoch=0,
+    def _idle(self, name, **kw):
+        return Strategy(
+            name=name, level=QuestionLevel.OBJECT, source="frontier",
+            templates={"th": ["{a}?"]}, born_epoch=0, **kw
         )
+
+    def test_a_strategy_offered_chances_but_never_chosen_is_retired(self):
+        pop = Population(rng=random.Random(17), max_size=40)
+        idle = self._idle("ตัวที่มีโอกาสแต่ไม่เคยถูกเลือก")
+        pop.strategies[idle.name] = idle
+        for e in range(1, 30):
+            idle.offered += 1          # แหล่งเป้าหมายมีของให้ถามทุกรอบ
+            pop.credit({"meta_probe": 0.9})
+            pop.evolve(e, [], 0.5)
+        self.assertNotIn(idle.name, {s.name for s in pop.live()})
+
+    def test_a_strategy_whose_source_is_still_empty_is_protected(self):
+        """comparative_probe ต้องรอจนกราฟมีคำอธิบายที่แข่งกันก่อนถึงจะถามได้.
+
+        ถ้านับความล้าสมัยจากอายุแทนที่จะนับจากโอกาส ความสามารถแบบนี้จะถูก
+        ตัดทิ้งก่อนได้ลงสนามสักครั้ง.
+        """
+        pop = Population(rng=random.Random(19), max_size=40)
+        waiting = self._idle("ตัวที่แหล่งเป้าหมายยังว่าง")   # offered คงอยู่ที่ 0
+        pop.strategies[waiting.name] = waiting
         for e in range(1, 30):
             pop.credit({"meta_probe": 0.9})
             pop.evolve(e, [], 0.5)
-        self.assertNotIn("ตัวที่ไม่มีใครเรียกใช้", {s.name for s in pop.live()})
+        self.assertIn(waiting.name, {s.name for s in pop.live()})
+
+    def test_gap_born_tools_cannot_swallow_the_population(self):
+        pop = Population(rng=random.Random(23), max_size=20)
+        for e in range(1, 60):
+            gaps = [
+                CapabilityGap(f"จุดบอดที่ {e}", QuestionLevel.META, "frontier", 0.9),
+                CapabilityGap(f"จุดบอดอีกอันที่ {e}", QuestionLevel.ONTOLOGY, "frontier", 0.9),
+            ]
+            pop.evolve(e, gaps, 0.5)
+        born = [s for s in pop.live() if s.origin == "capability-gap"]
+        self.assertLessEqual(len(born), pop.gap_quota)
+        self.assertGreater(len(born), 0)
 
     def test_reverting_a_bad_step_is_possible(self):
         pop = Population(rng=random.Random(11))

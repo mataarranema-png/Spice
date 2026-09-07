@@ -58,6 +58,9 @@ class Question:
     parent: str | None = None
     scores: dict[str, float] = field(default_factory=dict)
     forced: bool = False                    # มาจาก residual: ข้ามการคัดเลือก
+    probe: str = ""                         # ชนิดของหัววัด (ชื่อรากของยุทธวิธี)
+                                            # `object_probe~m3.221` กับ `object_probe`
+                                            # คือหัววัดเดียวกัน แค่คนละรุ่น
     subject: str = ""                       # สิ่งที่คำถามนี้พูดถึง ตามที่
                                             # ยุทธวิธี *รู้อยู่แล้ว* ตอนสร้าง —
                                             # ดีกว่าเดาย้อนจากข้อความที่ render แล้ว
@@ -69,6 +72,18 @@ class Question:
     @property
     def signature(self) -> str:
         return normalize(self.text)
+
+    @property
+    def concept(self) -> str:
+        """ลายเซ็นเชิง *แนวคิด*: (ระดับ, หัววัด, เป้าหมาย).
+
+        ความใหม่เชิงคำอย่างเดียวไม่พอ — คำถามสองข้อที่ใช้หัววัดเดียวกัน
+        กับ node เดียวกันที่ระดับเดียวกัน คือคำถามเดียวกัน ต่อให้เรียบเรียง
+        คนละสำนวน  การกลายพันธุ์ของแม่แบบทำให้ระบบผลิตคำถามแบบนั้นได้
+        ไม่จำกัด แล้วหลอกตัวเองว่ากำลังสำรวจอยู่.
+        """
+        probe = self.probe or self.strategy
+        return f"{int(self.level)}|{probe}|{'+'.join(sorted(self.targets))}"
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +98,7 @@ class Question:
             "scores": self.scores,
             "forced": self.forced,
             "subject": self.subject,
+            "probe": self.probe,
         }
 
     @classmethod
@@ -98,6 +114,7 @@ class Question:
             scores=dict(d.get("scores", {})),
             forced=d.get("forced", False),
             subject=d.get("subject", ""),
+            probe=d.get("probe", ""),
         )
 
 
@@ -109,6 +126,7 @@ class QuestionLedger:
         self._signatures: set[str] = set()
         self._order: list[str] = []
         self._shingles: dict[str, frozenset[str]] = {}
+        self._concepts: set[str] = set()
         self.level_counts: dict[int, int] = {int(l): 0 for l in QuestionLevel}
 
     def __len__(self) -> int:
@@ -117,6 +135,10 @@ class QuestionLedger:
     def seen(self, q: Question | str) -> bool:
         sig = q.signature if isinstance(q, Question) else normalize(q)
         return sig in self._signatures
+
+    def seen_concept(self, q: Question) -> bool:
+        """เคยเอาหัววัดชนิดนี้ ที่ระดับนี้ ไปจิ้ม node นี้แล้วหรือยัง."""
+        return bool(q.targets) and q.concept in self._concepts
 
     def novelty(self, q: Question | str) -> float:
         """1.0 = ไม่เคยมีอะไรใกล้เคียง, 0.0 = ซ้ำเป๊ะ."""
@@ -153,6 +175,7 @@ class QuestionLedger:
         if sig in self._signatures:
             return
         self._signatures.add(sig)
+        self._concepts.add(q.concept)
         self._order.append(sig)
         self._shingles[sig] = shingles(q.text)
         self.level_counts[int(q.level)] = self.level_counts.get(int(q.level), 0) + 1
@@ -165,6 +188,7 @@ class QuestionLedger:
         return {
             "capacity": self.capacity,
             "order": self._order,
+            "concepts": sorted(self._concepts),
             "level_counts": self.level_counts,
         }
 
@@ -175,6 +199,7 @@ class QuestionLedger:
             led._signatures.add(sig)
             led._order.append(sig)
             led._shingles[sig] = shingles(sig)
+        led._concepts = set(d.get("concepts", ()))
         led.level_counts = {int(k): v for k, v in d.get("level_counts", {}).items()}
         for l in QuestionLevel:
             led.level_counts.setdefault(int(l), 0)

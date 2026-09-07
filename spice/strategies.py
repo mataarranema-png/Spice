@@ -30,6 +30,7 @@ SOURCES = (
     "hole",            # คู่ที่ "ควรเกี่ยวกัน" แต่ไม่มีเส้นทางถึงกัน
     "residual",        # เศษที่คำตอบก่อนหน้าอธิบายไม่ได้
     "self",            # ข้อจำกัดของตัวระบบเอง
+    "comparison",      # คำอธิบายที่แข่งกันอธิบายสิ่งเดียวกัน
 )
 
 
@@ -43,6 +44,7 @@ class GenerationContext:
     limits: list[str] = field(default_factory=list)
     recent_answers: list[tuple[str, str]] = field(default_factory=list)
     budget_per_strategy: int = 3
+    focus_ids: frozenset[str] = frozenset()   # ย่านที่ก้นหอยกำลังขุดอยู่
 
 
 @dataclass
@@ -56,6 +58,7 @@ class Strategy:
     born_epoch: int = 0
     fitness: float = 0.5
     uses: int = 0
+    offered: int = 0        # จำนวนรอบที่แหล่งเป้าหมายของมัน *มีของให้ถาม*
     wins: float = 0.0
     origin: str = "builtin"
 
@@ -72,6 +75,7 @@ class Strategy:
         slots = _collect_slots(self.source, ctx)
         if not slots:
             return []
+        self.offered += 1
         out: list[Question] = []
         templates = self._pick_templates(ctx)
         for tmpl in templates:
@@ -86,6 +90,7 @@ class Strategy:
                     targets=tuple(slot.get("_ids", ())),
                     epoch=ctx.epoch,
                     subject=slot.get("_subject", slot.get("a", "")),
+                    probe=_base_name(self.name),
                 )
                 out.append(q)
         return out
@@ -103,6 +108,7 @@ class Strategy:
             "born_epoch": self.born_epoch,
             "fitness": self.fitness,
             "uses": self.uses,
+            "offered": self.offered,
             "wins": self.wins,
             "origin": self.origin,
         }
@@ -119,6 +125,7 @@ class Strategy:
             born_epoch=d.get("born_epoch", 0),
             fitness=d.get("fitness", 0.5),
             uses=d.get("uses", 0),
+            offered=d.get("offered", 0),
             wins=d.get("wins", 0.0),
             origin=d.get("origin", "builtin"),
         )
@@ -142,7 +149,7 @@ def _sample(items: list, ctx: "GenerationContext", k: int) -> list:
     if len(items) <= k:
         return list(items)
     pool = list(items)
-    weights = [max(0.05, w) for w in (_slot_weight(x) for x in pool)]
+    weights = [max(0.05, _slot_weight(x, ctx)) for x in pool]
     out = []
     for _ in range(k):
         total = sum(weights)
@@ -157,12 +164,24 @@ def _sample(items: list, ctx: "GenerationContext", k: int) -> list:
     return out
 
 
-def _slot_weight(item: Any) -> float:
+def _slot_weight(item: Any, ctx: "GenerationContext") -> float:
+    """ความไม่แน่นอน + โบนัสถ้าอยู่ในย่านที่กำลังโฟกัส.
+
+    การสุ่มทั่วทั้งกราฟอย่างสม่ำเสมอทำให้การสำรวจกระจายจนตื้น: แตะทุกที่
+    อย่างละนิด ไม่ขุดที่ไหนจนถึงก้น  การถ่วงน้ำหนักเข้าหาย่านหนึ่งทำให้
+    ก้นหอยขุดลึกก่อน แล้วค่อย *อพยพ* เมื่อย่านนั้นตัน (ดู `Spiral._migrate`).
+    """
+    node = None
     if isinstance(item, Node):
-        return item.uncertainty + 0.1
-    if isinstance(item, tuple) and item and isinstance(item[0], Node):
-        return item[0].uncertainty + 0.1
-    return 1.0
+        node = item
+    elif isinstance(item, tuple) and item and isinstance(item[0], Node):
+        node = item[0]
+    if node is None:
+        return 1.0
+    w = node.uncertainty + 0.1
+    if node.id in ctx.focus_ids:
+        w += 0.7
+    return w
 
 
 def _node_slot(n: Node) -> dict[str, Any]:
@@ -189,6 +208,12 @@ def _collect_slots(source: str, ctx: GenerationContext) -> list[dict[str, Any]]:
         return [
             {"a": n.label, "residual": r, "_ids": (n.id,), "_subject": n.label}
             for n, r in _sample(g.open_residuals(WIDE), ctx, NARROW)
+        ]
+    if source == "comparison":
+        return [
+            {"a": t.label, "b": r1.label, "c": r2.label,
+             "_ids": (t.id, r1.id, r2.id), "_subject": t.label}
+            for t, r1, r2 in g.rival_explanations(8)
         ]
     if source == "self":
         # คำถามถึงตัวเองผูกกับ node เดียวเสมอ — ระบบจึงสะสม *แบบจำลอง
@@ -350,6 +375,40 @@ def builtin_strategies() -> list[Strategy]:
                     "Is {a} a real thing, or a category the observer built for convenience?",
                     "With nobody observing, is {a} still {a} — and is that question even meaningful?",
                     "Where does {a} end, and who decides that is the boundary?",
+                ],
+            },
+        ),
+        Strategy(
+            name="comparative_probe",
+            level=QuestionLevel.ASSUMPTION,
+            source="comparison",
+            templates={
+                "th": [
+                    "{b} กับ {c} ต่างอ้างว่าอธิบาย {a} ได้ — อันไหนอธิบายได้มากกว่า และวัดด้วยอะไร?",
+                    "ถ้า {b} ถูก {c} จะเหลือบทบาทอะไรกับ {a}?",
+                    "อะไรที่ {b} อธิบาย {a} ได้ แต่ {c} อธิบายไม่ได้ — และกลับกัน?",
+                ],
+                "en": [
+                    "{b} and {c} both claim to account for {a} — which accounts for more, and measured how?",
+                    "If {b} holds, what role is left for {c} in {a}?",
+                    "What does {b} explain about {a} that {c} cannot — and the reverse?",
+                ],
+            },
+        ),
+        Strategy(
+            name="degree_probe",
+            level=QuestionLevel.MECHANISM,
+            source="frontier",
+            templates={
+                "th": [
+                    "{a} มีได้มากน้อยแค่ไหน และวัดเป็นหน่วยอะไร?",
+                    "อะไรคือค่าที่น้อยที่สุดและมากที่สุดที่ {a} ยังเป็น {a} อยู่?",
+                    "{a} เปลี่ยนแบบต่อเนื่อง หรือกระโดดเป็นขั้น?",
+                ],
+                "en": [
+                    "How much {a} can there be, and in what units?",
+                    "What are the least and greatest values at which {a} is still {a}?",
+                    "Does {a} vary continuously, or jump in steps?",
                 ],
             },
         ),
@@ -532,7 +591,7 @@ def _base_name(name: str) -> str:
     return name.split("~")[0].split("×")[0].split("@")[0]
 
 
-_SLOT_TOKENS = ("{a}", "{b}", "{residual}", "{limit}", "{status}")
+_SLOT_TOKENS = ("{a}", "{b}", "{c}", "{residual}", "{limit}", "{status}")
 
 
 def _retarget_templates(
@@ -546,6 +605,7 @@ def _retarget_templates(
         "hole": ("{a}", "{b}"),
         "residual": ("{a}", "{residual}"),
         "self": ("{limit}",),
+        "comparison": ("{a}", "{b}", "{c}"),
     }[new_source]
     allowed = set(required)
     out: dict[str, list[str]] = {}

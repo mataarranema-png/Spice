@@ -13,6 +13,7 @@ N = ความใหม่ (ถ่วงด้วยความหายา�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .graph import KnowledgeGraph
 from .question import Question, QuestionLedger, jaccard, shingles
@@ -84,27 +85,44 @@ def select(
     k: int = 3,
     min_novelty: float = 0.35,
     diversity: float = 0.55,
+    bonus: Callable[[Question], float] | None = None,
 ) -> list[Scored]:
     """คัดเลือก Q* แบบ maximal-marginal-relevance.
 
-    ตัวกรองสองชั้น ตรงกับที่ `question.py` อธิบายไว้:
-      1. เคยถามเป๊ะ ๆ หรือความใหม่ต่ำกว่าเกณฑ์ -> ตัดทิ้ง
-      2. คล้ายคำถามที่เพิ่งถูกเลือกใน epoch เดียวกัน -> ตัดทิ้ง
-    ชั้นที่สองสำคัญไม่แพ้ชั้นแรก: ไม่งั้นระบบจะเลือกคำถามเดียวกัน
-    ที่พูดคนละสำนวน k ตัวใน epoch เดียว แล้วนึกว่าตัวเองขยัน.
+    ตัวกรองสามชั้น:
+      1. เคยถามเป๊ะ ๆ หรือ *เคยเอาหัววัดชนิดนี้จิ้ม node นี้ที่ระดับนี้แล้ว*
+         -> ตัดทิ้ง  (ชั้นเชิงแนวคิด — แข็งแรงกว่าการเทียบตัวอักษรมาก
+         เพราะการกลายพันธุ์ของแม่แบบผลิตคำถามที่ต่างแค่สำนวนได้ไม่จำกัด)
+      2. ความใหม่เชิงคำต่ำกว่าเกณฑ์ -> ตัดทิ้ง
+      3. คล้ายคำถามที่เพิ่งถูกเลือกใน epoch เดียวกัน -> ตัดทิ้ง
+
+    `bonus` คือช่องให้ผู้เรียกเติมแรงจูงใจ *เชิงสำรวจ* เข้ามา (ดู
+    `Population.explore_bonus`) เพื่อไม่ให้การเลือกเป็นการโลภล้วน ๆ
+    ต่อยุทธวิธีที่บังเอิญนำอยู่ตอนนี้.
     """
     pool: list[Scored] = []
     seen_sig: set[str] = set()
+    seen_concept: set[str] = set()
     for q in candidates:
         if q.signature in seen_sig or ledger.seen(q):
             continue
+        if not q.forced and (ledger.seen_concept(q) or q.concept in seen_concept):
+            continue
         seen_sig.add(q.signature)
+        if q.targets:
+            seen_concept.add(q.concept)
         s = score_question(q, graph, ledger, weights)
         if s.n < min_novelty and not q.forced:
             continue
+        if bonus is not None:
+            s.total += bonus(q)
+            q.scores["explore"] = s.total - q.scores["total"]
+            q.scores["total"] = s.total
         pool.append(s)
 
-    pool.sort(key=lambda s: -s.total)
+    # คำถามที่ถูกบังคับ (มนุษย์ถามเอง / ขอบเขตที่เพิ่งชน) ไม่ได้แข่งกับ
+    # คำถามที่เครื่องสร้าง — มันขึ้นหัวแถวเสมอ
+    pool.sort(key=lambda s: (not s.question.forced, -s.total))
 
     chosen: list[Scored] = []
     chosen_shingles: list[frozenset[str]] = []
@@ -112,7 +130,9 @@ def select(
         if len(chosen) >= k:
             break
         sh = shingles(s.question.text)
-        if any(jaccard(sh, prev) > diversity for prev in chosen_shingles):
+        if not s.question.forced and any(
+            jaccard(sh, prev) > diversity for prev in chosen_shingles
+        ):
             continue
         chosen.append(s)
         chosen_shingles.append(sh)

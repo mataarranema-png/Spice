@@ -22,6 +22,11 @@ def ctx(limits=("หน่วยความจำจำกัด",), seed=0):
     g.add_node("คู่ขัดแย้ง")
     g.add_edge("เกลียว", "คู่ขัดแย้ง", Relation.CONTRADICTS)
     g.by_label("ก้นหอย").residuals.append("ทำไมอัตราส่วนจึงคงที่")
+    # คำอธิบายสองอันที่แข่งกันอธิบายสิ่งเดียวกัน — วัตถุดิบของ source "comparison"
+    g.add_node("การเติบโตแบบโนมอน", confidence=0.7)
+    g.add_node("การจัดเรียงแบบฟีโบนักชี", confidence=0.4)
+    g.add_edge("การเติบโตแบบโนมอน", "ก้นหอย", Relation.EXPLAINS)
+    g.add_edge("การจัดเรียงแบบฟีโบนักชี", "ก้นหอย", Relation.CAUSES)
     return GenerationContext(g, QuestionLedger(), 0, random.Random(seed), limits=list(limits))
 
 

@@ -56,11 +56,13 @@ class CapabilityGap:
 class SelfModel:
     stagnation_window: int = 3
     novelty_floor: float = 0.45
+    gain_floor: float = 0.08
     residual_patience: int = 3
     monoculture_share: float = 0.55
 
     uncertainty_history: list[float] = field(default_factory=list)
     novelty_history: list[float] = field(default_factory=list)
+    gain_history: list[float] = field(default_factory=list)
     node_history: list[int] = field(default_factory=list)
     contradiction_history: list[int] = field(default_factory=list)
     residual_age: dict[str, int] = field(default_factory=dict)
@@ -69,6 +71,8 @@ class SelfModel:
     instrument_failures: list[str] = field(default_factory=list)
     limits_seen: dict[str, Limit] = field(default_factory=dict)
     answered_limits: set[str] = field(default_factory=set)
+    _cache_key: tuple | None = None
+    _cache: list = field(default_factory=list)
 
     # ---------------- การสังเกตตัวเอง ----------------
 
@@ -81,10 +85,12 @@ class SelfModel:
         selected_strategies: list[str],
         novelty_mean: float,
         open_residuals: list[str],
+        gain_mean: float = 0.0,
         instrument_failures: list[str],
     ) -> None:
         self.uncertainty_history.append(stats["mean_uncertainty"])
         self.novelty_history.append(novelty_mean)
+        self.gain_history.append(gain_mean)
         self.node_history.append(stats["nodes"])
         self.contradiction_history.append(stats["contradictions"])
         self.strategy_uses.update(selected_strategies)
@@ -101,6 +107,18 @@ class SelfModel:
     # ---------------- การค้นพบขอบเขต ----------------
 
     def detect(self, epoch: int, budget: "Budget | None" = None) -> list[Limit]:
+        """ตรวจหาขอบเขตของตัวเอง — ผลลัพธ์ถูกจำไว้ต่อหนึ่งรอบ.
+
+        เครื่องยนต์เรียกเมธอดนี้หลายครั้งใน epoch เดียว (เอาข้อจำกัดไปทำ
+        คำถาม, เอาไปหาช่องโหว่, เอาไปตัดสินการอพยพ) แต่ `_merge` เพิ่มอายุ
+        ของข้อจำกัดทุกครั้งที่ถูกเรียก — ถ้าไม่จำไว้ อายุจะถูกนับเกินจริง
+        เป็นเท่าตัว และเกณฑ์ "อยู่ทนอย่างน้อยสองรอบ" ก่อนให้กำเนิดเครื่องมือ
+        ใหม่ก็จะผ่านตั้งแต่รอบแรก ซึ่งคือสิ่งที่มันมีไว้กันพอดี.
+        """
+        key = (epoch, None if budget is None else (budget.nodes, budget.asked))
+        if self._cache_key == key:
+            return self._cache
+
         found: list[Limit] = []
 
         # 1. ระดับคำถามที่ระบบไม่เคยแตะ
@@ -161,6 +179,22 @@ class SelfModel:
                     )
                 )
 
+        # 4b. เครื่องมือสืบค้นหมดสภาพ — ข้อจำกัดที่อยู่นอกตัวคำถามทั้งหมด
+        if len(self.gain_history) >= w:
+            recent = self.gain_history[-w:]
+            avg = sum(recent) / len(recent)
+            if avg < self.gain_floor:
+                found.append(
+                    Limit(
+                        "exhaustion",
+                        f"ความประหลาดใจเฉลี่ยตกไปที่ {avg:.3f} ต่อเนื่อง {w} รอบ — "
+                        "คำถามยังใหม่อยู่ แต่คำตอบไม่เปลี่ยนแบบจำลองอีกแล้ว "
+                        "คอขวดอยู่ที่ *ตัวสืบค้น* ไม่ใช่ที่วิธีถาม",
+                        0.9,
+                        epoch,
+                    )
+                )
+
         # 5. ความขัดแย้งสะสมโดยไม่มีวิธีตัดสิน
         if len(self.contradiction_history) >= w:
             tail = self.contradiction_history[-w:]
@@ -200,7 +234,10 @@ class SelfModel:
             for lim in budget.pressure(epoch):
                 found.append(lim)
 
-        return self._merge(found, epoch)
+        merged = self._merge(found, epoch)
+        self._cache_key = key
+        self._cache = merged
+        return merged
 
     def _merge(self, found: list[Limit], epoch: int) -> list[Limit]:
         out: list[Limit] = []
@@ -254,6 +291,7 @@ class SelfModel:
         return {
             "uncertainty_history": self.uncertainty_history[-64:],
             "novelty_history": self.novelty_history[-64:],
+            "gain_history": self.gain_history[-64:],
             "node_history": self.node_history[-64:],
             "contradiction_history": self.contradiction_history[-64:],
             "residual_age": self.residual_age,
@@ -268,6 +306,7 @@ class SelfModel:
         sm = cls()
         sm.uncertainty_history = list(d.get("uncertainty_history", ()))
         sm.novelty_history = list(d.get("novelty_history", ()))
+        sm.gain_history = list(d.get("gain_history", ()))
         sm.node_history = list(d.get("node_history", ()))
         sm.contradiction_history = list(d.get("contradiction_history", ()))
         sm.residual_age = dict(d.get("residual_age", {}))
@@ -287,6 +326,7 @@ _GAP_ROUTING: dict[str, tuple[QuestionLevel, str]] = {
     "unresolved": (QuestionLevel.ASSUMPTION, "contradiction"),
     "monoculture": (QuestionLevel.META, "frontier"),
     "instrument": (QuestionLevel.SELF_REFERENCE, "self"),
+    "exhaustion": (QuestionLevel.SELF_REFERENCE, "self"),
     "resource": (QuestionLevel.SELF_REFERENCE, "self"),
 }
 

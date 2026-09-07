@@ -61,6 +61,55 @@ class TestScoring(unittest.TestCase):
         near.forced = True
         self.assertEqual(len(select([near], self.g, self.led, Weights(), k=1)), 1)
 
+    def test_the_same_probe_on_the_same_node_is_blocked_however_reworded(self):
+        from spice.question import Question
+
+        first = Question(
+            text="ก้นหอยเกิดขึ้นได้อย่างไร?", level=QuestionLevel.OBJECT,
+            strategy="object_probe~m2.1", probe="object_probe",
+            targets=(self.unknown.id,),
+        )
+        self.led.record(first)
+        reworded = Question(
+            text="อะไรคือสิ่งที่ทำให้สิ่งนั้นปรากฏขึ้นมาในโลกนี้ได้เลย?",
+            level=QuestionLevel.OBJECT, strategy="object_probe~m9.9",
+            probe="object_probe", targets=(self.unknown.id,),
+        )
+        self.assertGreater(self.led.novelty(reworded), 0.9)   # ใหม่เชิงคำ
+        self.assertEqual(select([reworded], self.g, self.led, Weights(), k=1), [])
+
+    def test_a_different_probe_on_the_same_node_still_passes(self):
+        from spice.question import Question
+
+        self.led.record(Question(
+            text="ก้นหอยเกิดขึ้นได้อย่างไร?", level=QuestionLevel.OBJECT,
+            strategy="object_probe", probe="object_probe", targets=(self.unknown.id,)))
+        other = Question(
+            text="เราสมมติอะไรไว้เงียบ ๆ ตอนที่พูดว่ายังไม่รู้?",
+            level=QuestionLevel.ASSUMPTION, strategy="assumption_probe",
+            probe="assumption_probe", targets=(self.unknown.id,))
+        self.assertEqual(len(select([other], self.g, self.led, Weights(), k=1)), 1)
+
+    def test_a_human_question_outranks_generated_ones(self):
+        from spice.question import Question
+
+        human = Question(text="คำถามของมนุษย์", level=QuestionLevel.OBJECT,
+                         strategy="human", targets=(self.known.id,), forced=True)
+        strong = [
+            self._q(f"คำถามที่เครื่องสร้างและได้คะแนนสูงข้อที่ {i} " + "ต" * i, self.unknown)
+            for i in range(6)
+        ]
+        chosen = select([*strong, human], self.g, self.led, Weights(), k=2)
+        self.assertIs(chosen[0].question, human)
+
+    def test_the_explore_bonus_reaches_the_score(self):
+        q = self._q("คำถามที่ยังไม่เคยถาม", self.unknown)
+        plain = select([q], self.g, self.led, Weights(), k=1)[0].total
+        self.led = QuestionLedger()
+        q2 = self._q("คำถามที่ยังไม่เคยถาม", self.unknown)
+        boosted = select([q2], self.g, self.led, Weights(), k=1, bonus=lambda _: 0.5)[0].total
+        self.assertAlmostEqual(boosted - plain, 0.5, places=5)
+
     def test_reward_rises_when_contradictions_surface(self):
         before = {"nodes": 10, "mean_uncertainty": 0.5, "contradictions": 0, "unexplained": 3}
         quiet = dict(before, nodes=11)

@@ -12,7 +12,7 @@ import random
 import sys
 from pathlib import Path
 
-from . import store
+from . import exchange, store
 from .investigator import CompositeInvestigator, ReflectiveInvestigator
 from .selfmodel import Budget
 from .spiral import Spiral
@@ -80,6 +80,26 @@ def cmd_ask(args) -> int:
     sp.ask(args.question, QuestionLevel(args.level))
     sp.run(1)
     store.save(sp, args.state)
+    print(sp.report(last=1))
+    return 0
+
+
+def cmd_propose(args) -> int:
+    sp = _load(args, args.topic)
+    path = exchange.dump(sp, args.out)
+    store.save(sp, args.state)
+    print(f"ก้นหอยรอบ {sp.epoch} อยากรู้ {len(sp._proposed)} เรื่อง — เขียนไปที่ {path}")
+    for s in sp._proposed:
+        print(f"  [{s.question.level.th}] {s.question.text}")
+    print(f"\nเติมช่อง answer ในไฟล์ แล้วสั่ง: python -m spice --state {args.state} absorb --in {path}")
+    return 0
+
+
+def cmd_absorb(args) -> int:
+    sp = _load(args)
+    rec, answered = exchange.load(sp, args.inp)
+    store.save(sp, args.state)
+    print(f"รับคำตอบจากภายนอก {answered} ข้อ (ที่เหลือใช้ตัวสืบค้นในตัว)\n")
     print(sp.report(last=1))
     return 0
 
@@ -161,6 +181,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--topic", default=None)
     a.add_argument("--level", type=int, default=0, choices=range(6))
     a.set_defaults(func=cmd_ask)
+
+    pr = sub.add_parser("propose", help="ให้ก้นหอยบอกว่ารอบนี้อยากรู้อะไร (ไม่ตอบเอง)")
+    pr.add_argument("--out", default="questions.json")
+    pr.add_argument("--topic", default=None)
+    pr.set_defaults(func=cmd_propose)
+
+    ab = sub.add_parser("absorb", help="ป้อนคำตอบจากภายนอกกลับเข้าก้นหอย")
+    ab.add_argument("--in", dest="inp", default="questions.json")
+    ab.set_defaults(func=cmd_absorb)
 
     rep = sub.add_parser("report", help="สรุปรอบล่าสุด")
     rep.add_argument("--last", type=int, default=3)

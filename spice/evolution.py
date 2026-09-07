@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -29,8 +30,9 @@ from .types import QuestionLevel
 
 EMA = 0.35
 OPTIMISM = 0.55          # fitness เริ่มต้นของยุทธวิธีที่ยังไม่เคยถูกใช้
-RETIRE_BELOW = 0.22
+RETIRE_BELOW = 0.16
 MIN_USES_BEFORE_RETIRE = 3
+EXPLORE_C = 0.16         # ค่าคงที่ของ UCB — สูงไปคือสุ่มมั่ว ต่ำไปคือโลภ
 STALE_AFTER = 8          # เกิดมานานเท่านี้แล้วยังไม่เคยถูกเลือกเลย = ตายแล้ว
 W_FLOOR, W_CEIL = 0.10, 0.60   # ห้ามให้พจน์ใดกลืนฟังก์ชันเป้าหมายทั้งหมด
 
@@ -100,6 +102,7 @@ class Population:
         *,
         max_size: int = 22,
         min_size: int = 6,
+        gap_quota: int | None = None,
     ) -> None:
         pool = strategies if strategies is not None else builtin_strategies()
         self.strategies: dict[str, Strategy] = {s.name: s for s in pool}
@@ -107,6 +110,7 @@ class Population:
         self.rng = rng or random.Random(0)
         self.max_size = max_size
         self.min_size = min_size
+        self.gap_quota = gap_quota if gap_quota is not None else max(2, max_size * 2 // 5)
 
         self._best_reward: float = float("-inf")
         self._last_step: tuple[float, float, float] | None = None
@@ -130,15 +134,34 @@ class Population:
             s.wins += reward
             s.fitness = (1 - EMA) * s.fitness + EMA * max(0.0, min(1.0, reward))
 
-    def decay_unused(self, used: set[str]) -> None:
-        """ยุทธวิธีที่ไม่ถูกเลือกเลยจะค่อย ๆ จางลง.
+    def explore_bonus(self, name: str) -> float:
+        """โบนัสสำรวจแบบ UCB1 ให้ยุทธวิธีที่ยังถูกลองน้อย.
 
-        ไม่ใช่การลงโทษ แต่เป็นการยอมรับว่าถ้าไม่มีคำถามไหนของมันชนะ
-        การคัดเลือกได้เลย มันก็ไม่ได้มีส่วนในการเคลื่อนก้นหอย.
+        ถ้าเรียงตาม fitness ล้วน ๆ ยุทธวิธีที่บังเอิญได้คะแนนดีในสองรอบแรก
+        จะผูกขาดการเลือกไปตลอด และตัวที่ยังไม่เคยถูกลองเลยจะไม่มีวันได้พิสูจน์
+        ตัวเอง — ซึ่งเป็นเหตุผลเดียวกับที่ SelfModel เคยฟ้องว่าเกิด monoculture.
+        """
+        s = self.strategies.get(name)
+        if s is None:
+            return 0.0
+        total = sum(x.uses for x in self.strategies.values())
+        return EXPLORE_C * math.sqrt(math.log(total + 2) / (s.uses + 1))
+
+    def decay_unused(self, used: set[str]) -> None:
+        """ยุทธวิธีที่ไม่ถูกเลือกจะจางลง — แต่ *ช้ามาก*.
+
+        เดิมใช้ 0.97 ต่อรอบ ซึ่งดูไม่มาก จนกระทั่งดูตัวเลขจริง: ในประชากร
+        22 ตัวที่เลือกได้รอบละ 3 คำถาม ยุทธวิธีหนึ่งถูกเลือกราว 14% ของรอบ
+        การหักทบต้นจึงลากทุกตัวลงต่ำกว่าเกณฑ์ปลดระวางภายในร้อยรอบ — รัน
+        150 รอบจบลงด้วยประชากรที่ไม่เหลือ builtin สักตัว ทั้งที่ไม่มีตัวไหน
+        เคยถูกวัดว่าแย่จริง
+
+        การสำรวจตอนนี้เป็นหน้าที่ของ UCB (`explore_bonus`) แล้ว การปลดระวาง
+        จึงควรอิงกับ *ผลที่วัดได้* ไม่ใช่การเหี่ยวเฉาตามเวลา.
         """
         for name, s in self.strategies.items():
             if name not in used:
-                s.fitness *= 0.97
+                s.fitness *= 0.995
 
     # ---------------- วิวัฒนาการ ----------------
 
@@ -153,13 +176,42 @@ class Population:
         self.generation += 1
 
         # 1. ให้กำเนิดเครื่องมือใหม่จากจุดบอด — สำคัญกว่าการกลายพันธุ์สุ่ม
+        # เครื่องมือที่เกิดจากจุดบอดมีค่า แต่ถ้าปล่อยให้เกิดเรื่อย ๆ มันจะกิน
+        # ประชากรจนไม่เหลือหัววัดชนิดอื่น (วัดได้ 14 จาก 20 ตัว) จำกัดโควตาไว้
+        # แล้ว *สลับตัวที่อ่อนที่สุดออก* แทนที่จะปิดประตูไม่ให้เกิดเลย
         for gap in gaps:
             s = strategy_from_gap(gap.text, gap.level, epoch, gap.source)
-            if s.name not in self.strategies:
-                self.strategies[s.name] = s
-                rep.born.append(s.name)
+            if s.name in self.strategies:
+                continue
+            existing = [x for x in self.live() if x.origin == "capability-gap"]
+            if len(existing) >= self.gap_quota:
+                weakest = min(existing, key=lambda x: x.fitness)
+                if weakest.fitness >= s.fitness:
+                    continue
+                del self.strategies[weakest.name]
+                rep.retired.append(weakest.name)
+            self.strategies[s.name] = s
+            rep.born.append(s.name)
 
         ranked = sorted(self.live(), key=lambda s: -s.fitness)
+        median = (
+            sorted(s.fitness for s in ranked)[len(ranked) // 2] if ranked else 0.5
+        )
+
+        def temper(child: Strategy) -> Strategy:
+            """กดความมั่นใจแรกเกิดลงมาที่มัธยฐานของประชากร.
+
+            ลูกที่เกิดใหม่รับ fitness มาจากพ่อแม่ (× 0.9) โดยยังไม่เคยถูกวัด
+            เลยสักครั้ง ส่วนตัวที่ทำงานมาแล้วถือคะแนน *ที่วัดได้จริง* ซึ่ง
+            มักต่ำกว่า  ผลคือทุกครั้งที่ประชากรล้น ตัวที่ถูกวัดจะถูกตัดออก
+            ก่อนตัวที่ยังไม่เคยพิสูจน์ตัวเอง — รัน 150 รอบจึงจบลงโดยไม่เหลือ
+            ยุทธวิธีต้นฉบับสักตัว ทั้งที่ไม่มีตัวไหนเคยแพ้การวัดจริง
+
+            การสำรวจเป็นหน้าที่ของ UCB อยู่แล้ว ลูกใหม่จึงไม่ต้องการ
+            แต้มต่อเพิ่มเพื่อให้ได้ลงสนาม.
+            """
+            child.fitness = min(child.fitness, median)
+            return child
 
         # 2. กลายพันธุ์จากตัวที่ทำได้ดี
         if ranked and len(self.strategies) < self.max_size:
@@ -178,7 +230,7 @@ class Population:
             partners = [s2 for s2 in ranked[1:] if _root(s2) != base] or ranked[1:]
             b = partners[0]
             if a.name != b.name:
-                child = cross_strategies(a, b, rng, epoch)
+                child = temper(cross_strategies(a, b, rng, epoch))
                 if child.name not in self.strategies:
                     self.strategies[child.name] = child
                     rep.born.append(child.name)
@@ -210,10 +262,14 @@ class Population:
             tried_and_failed = (
                 s.uses >= MIN_USES_BEFORE_RETIRE and s.fitness < RETIRE_BELOW
             )
-            # "ไม่เคยถูกเลือกเลยตลอด N รอบ" เป็นเหตุผลให้ปลดระวางพอ ๆ กับ
-            # "ถูกเลือกแล้วให้ผลแย่" — ไม่งั้นเครื่องมือที่เกิดจากจุดบอดจะ
-            # สะสมจนท่วมประชากร โดยไม่มีวันถูกตัดออก เพราะมันไม่เคยทำงาน
-            never_used = s.uses == 0 and (epoch - s.born_epoch) >= STALE_AFTER
+            # "ไม่เคยถูกเลือกเลย ทั้งที่มีโอกาสหลายครั้ง" เป็นเหตุผลให้ปลดระวาง
+            # พอ ๆ กับ "ถูกเลือกแล้วให้ผลแย่"
+            #
+            # นับจาก `offered` ไม่ใช่จากอายุ: ยุทธวิธีอย่าง comparative_probe
+            # ต้องรอจนกราฟมีคำอธิบายที่แข่งกันจริงก่อนถึงจะมีอะไรให้ถาม การนับ
+            # ตามอายุทำให้มันถูกตัดทิ้งก่อนจะได้ลงสนามสักครั้ง — ความสามารถ
+            # หายไปถาวรพอดีตอนที่มันกำลังจะมีประโยชน์
+            never_used = s.uses == 0 and s.offered >= STALE_AFTER
             if (tried_and_failed or never_used) and can_drop(s):
                 retired.append(s.name)
 
@@ -269,6 +325,7 @@ class Population:
             "weights": self.weights.to_dict(),
             "max_size": self.max_size,
             "min_size": self.min_size,
+            "gap_quota": self.gap_quota,
             "generation": self.generation,
             "best_reward": None if self._best_reward == float("-inf") else self._best_reward,
             "last_step": list(self._last_step) if self._last_step else None,
@@ -282,6 +339,7 @@ class Population:
             rng,
             max_size=d.get("max_size", 22),
             min_size=d.get("min_size", 6),
+            gap_quota=d.get("gap_quota"),
         )
         pop.generation = d.get("generation", 0)
         br = d.get("best_reward")

@@ -276,6 +276,26 @@ class KnowledgeGraph:
                             return out
         return out
 
+    def rival_explanations(self, limit: int = 8) -> list[tuple[Node, Node, Node]]:
+        """สิ่งเดียวที่มีคำอธิบายมากกว่าหนึ่งอันอ้างสิทธิ์อยู่.
+
+        แหล่งนี้ถูกเพิ่มเข้ามาหลังจากระบบตอบคำถามของตัวเองว่า มันถาม
+        "อันไหนดีกว่า" ไม่ได้เลย เพราะยุทธวิธีทุกตัวเล็งไปที่ node เดียว
+        หรือคู่ที่ยังไม่เชื่อมกัน — ไม่มีตัวไหนเล็งไปที่ *ชุดที่ถูกจัดอันดับ*
+        """
+        parents: dict[str, list[Node]] = defaultdict(list)
+        for e in self.edges.values():
+            if e.relation.is_explanatory and e.source in self.nodes:
+                parents[e.target].append(self.nodes[e.source])
+        out: list[tuple[Node, Node, Node]] = []
+        for target_id, rivals in parents.items():
+            if len(rivals) < 2 or target_id not in self.nodes:
+                continue
+            rivals.sort(key=lambda n: (-n.confidence, n.label))
+            out.append((self.nodes[target_id], rivals[0], rivals[1]))
+        out.sort(key=lambda t: -t[0].uncertainty)
+        return out[:limit]
+
     def open_residuals(self, limit: int = 12) -> list[tuple[Node, str]]:
         out: list[tuple[Node, str]] = []
         for n in self.nodes.values():

@@ -138,6 +138,44 @@ class TestSpiralInvariants(unittest.TestCase):
         asked = [t.question.signature for r in clone.history for t in r.turns]
         self.assertEqual(len(asked), len(set(asked)))
 
+    def test_migration_does_not_thrash(self):
+        sp = spiral(seed=20)
+        sp.run(60)
+        migrations = sum(1 for r in sp.history if r.migrated)
+        # เคยยิงทุกรอบ (102/150) ซึ่งแย่กว่าการสุ่มทั่วกราฟ
+        self.assertLess(migrations, 30)
+        self.assertGreater(migrations, 0)
+
+    def test_the_spiral_settles_on_a_neighbourhood_to_dig(self):
+        sp = spiral(seed=21)
+        sp.run(6)
+        self.assertIsNotNone(sp.focus)
+        self.assertIn(sp.focus, sp.graph.nodes)
+
+    def test_evolution_is_credited_by_measured_surprise(self):
+        sp = spiral(seed=22)
+        sp.run(10)
+        for r in sp.history:
+            for t in r.turns:
+                self.assertIn("total", t.gain)
+                self.assertGreaterEqual(t.gain["total"], 0.0)
+                self.assertLessEqual(t.gain["total"], 1.0)
+
+    def test_a_run_that_stops_surprising_says_so_about_its_instrument(self):
+        class Repetitive:
+            name = "repetitive"
+
+            def investigate(self, q, graph):
+                from spice.types import Finding
+
+                return Finding(answer="เหมือนเดิมทุกครั้ง", confidence=0.5,
+                               residual="เศษเดิมที่ไม่เคยเปลี่ยน")
+
+        sp = Spiral.from_topic("ก้นหอย", seed=23, investigator=Repetitive())
+        sp.run(12)
+        kinds = {l.kind for l in sp.self_model.detect(sp.epoch, sp.budget)}
+        self.assertIn("exhaustion", kinds)
+
     def test_report_renders(self):
         sp = spiral(seed=15)
         sp.run(3)

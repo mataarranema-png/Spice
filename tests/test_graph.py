@@ -50,6 +50,23 @@ class TestKnowledgeGraph(unittest.TestCase):
         self.assertIn(frozenset(("a", "c")), pairs)
         self.assertNotIn(frozenset(("a", "b")), pairs)
 
+    def test_rival_explanations_finds_competing_accounts(self):
+        self.g.add_node("ก้นหอย")
+        self.g.add_node("การเติบโตแบบโนมอน", confidence=0.7)
+        self.g.add_node("การจัดเรียงแบบฟีโบนักชี", confidence=0.4)
+        self.g.add_node("ของที่อธิบายอยู่คนเดียว")
+        self.g.add_node("คำอธิบายเดี่ยว")
+        self.g.add_edge("การเติบโตแบบโนมอน", "ก้นหอย", Relation.EXPLAINS)
+        self.g.add_edge("การจัดเรียงแบบฟีโบนักชี", "ก้นหอย", Relation.CAUSES)
+        self.g.add_edge("คำอธิบายเดี่ยว", "ของที่อธิบายอยู่คนเดียว", Relation.EXPLAINS)
+        rivals = self.g.rival_explanations()
+        self.assertEqual(len(rivals), 1)
+        target, first, second = rivals[0]
+        self.assertEqual(target.label, "ก้นหอย")
+        # เรียงตามความมั่นใจ ตัวที่แข็งแรงกว่ามาก่อน
+        self.assertEqual(first.label, "การเติบโตแบบโนมอน")
+        self.assertEqual(second.label, "การจัดเรียงแบบฟีโบนักชี")
+
     def test_local_contradiction_rises_near_a_conflict(self):
         self.g.add_node("a")
         self.g.add_node("b")

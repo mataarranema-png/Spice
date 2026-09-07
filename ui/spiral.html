@@ -92,6 +92,8 @@ canvas.dragging{cursor:grabbing}
   color:var(--muted);font-size:11px;line-height:1.45}
 .q .res::before{content:"\2193\A0";color:var(--amber);font-weight:600}
 .q.forced .txt{color:var(--self)}
+.q .g{display:block;margin-top:3px;font-family:var(--f-mono);font-size:9.5px;
+  color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.02em}
 
 #right{position:fixed;top:16px;right:16px;width:298px;display:flex;flex-direction:column;gap:12px;
   max-height:calc(100vh - 130px)}
@@ -157,7 +159,7 @@ input[type=range]{width:82px;accent-color:var(--amber);cursor:pointer}
 #legend div{display:flex;align-items:center;gap:6px}
 #legend i{width:8px;height:8px;border-radius:50%;flex:none}
 
-#ceiling{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;
+#ceiling{position:fixed;left:50%;transform:translateX(-50%);bottom:92px;
   display:none;align-items:center;gap:13px;padding:10px 15px;
   background:rgba(32,17,20,.94);border:1px solid var(--st-contra);border-radius:var(--r);
   box-shadow:0 14px 40px rgba(0,0,0,.55);max-width:min(620px,92vw)}
@@ -203,7 +205,7 @@ input[type=range]{width:82px;accent-color:var(--amber);cursor:pointer}
     <div><span>node</span><b id="r-n">0</b></div>
     <div><span>ขัดแย้ง</span><b id="r-c">0</b></div>
     <div><span>คำถาม</span><b id="r-q">0</b></div>
-    <div><span>ความใหม่</span><b id="r-nov">0</b></div>
+    <div><span>ประหลาดใจ</span><b id="r-gain">0</b></div>
     <div><span>ยุทธวิธี</span><b id="r-s">0</b></div>
   </div>
 </div>
@@ -322,8 +324,19 @@ function jaccard(a, b){
   return inter ? inter / (a.size + b.size - inter) : 0;
 }
 
-function Ledger(){ this.sigs = new Set(); this.sh = []; this.levels = [0,0,0,0,0,0]; }
+function Ledger(){
+  this.sigs = new Set(); this.sh = []; this.levels = [0,0,0,0,0,0];
+  this.concepts = new Set();
+}
+/* (ระดับ, หัววัด, เป้าหมาย) — ความใหม่เชิงคำอย่างเดียวไม่พอ เพราะการ
+   กลายพันธุ์ของแม่แบบผลิตคำถามที่ต่างแค่สำนวนได้ไม่จำกัด */
+function conceptOf(q){
+  return q.level + "|" + (q.probe || q.strategy) + "|" + (q.target ? q.target.label : "");
+}
 Ledger.prototype.seen = function(t){ return this.sigs.has(norm(t)); };
+Ledger.prototype.seenConcept = function(q){
+  return !!q.target && this.concepts.has(conceptOf(q));
+};
 Ledger.prototype.novelty = function(t){
   if (this.sigs.has(norm(t))) return 0;
   var s = shingles(t);
@@ -344,8 +357,71 @@ Ledger.prototype.record = function(q){
   var sig = norm(q.text);
   if (this.sigs.has(sig)) return;
   this.sigs.add(sig); this.sh.push(shingles(q.text)); this.levels[q.level]++;
+  this.concepts.add(conceptOf(q));
   if (this.sh.length > 900) this.sh.shift();
 };
+
+/* ── ความประหลาดใจ: สัญญาณที่ควรขับวิวัฒนาการ ─────────────────
+   เดิมให้เครดิตตาม "เพิ่ม node ได้กี่ตัว" ซึ่งตัวสืบค้นผลิตให้ฟรีอยู่แล้ว
+   คำถามที่ดีมีนิยามเดียวที่ตรวจสอบได้: มันเปลี่ยนแบบจำลอง            */
+var W_REVISION = 0.34, W_FRESHNESS = 0.26, W_STRUCTURE = 0.22, W_CONFLICT = 0.18;
+
+function snapshot(g, targets){
+  var ids = new Set(), unc = {}, edges = new Set(), contra = 0;
+  targets.forEach(function(t){
+    if (!t) return;
+    ids.add(t);
+    g.neighbours(t).forEach(function(m){ ids.add(m); });
+  });
+  ids.forEach(function(n){ unc[n.label] = g.unc(n); });
+  for (var i = 0; i < g.edges.length; i++){
+    var e = g.edges[i];
+    if (ids.has(e.s) || ids.has(e.t)){
+      edges.add(e.s.label + "\u001f" + e.t.label + "\u001f" + e.rel);
+      if (e.rel === "contradicts") contra++;
+    }
+  }
+  return { ids: ids, unc: unc, edges: edges, contra: contra };
+}
+function residualFreshness(residual, known){
+  var t = (residual || "").trim();
+  if (!t) return 0;
+  var sh = shingles(t), worst = 0;
+  for (var i = 0; i < known.length; i++){
+    var sim = jaccard(sh, shingles(known[i]));
+    if (sim > worst){ worst = sim; if (worst >= 0.98) return 0; }
+  }
+  return Math.max(0, 1 - worst);
+}
+function knownResiduals(g){
+  var out = [];
+  g.nodes.forEach(function(n){
+    for (var i = 0; i < n.residuals.length; i++) out.push(n.residuals[i]);
+    if (n.residual) out.push(n.label);
+  });
+  return out;
+}
+function measureGain(before, g, targets, residual, known){
+  var after = snapshot(g, targets), moved = 0, shared = 0;
+  after.ids.forEach(function(n){
+    if (before.unc[n.label] !== undefined){
+      moved += Math.abs(before.unc[n.label] - g.unc(n));
+      shared++;
+    }
+  });
+  var revision = shared ? Math.min(1, (moved / shared) / 0.15) : 0;
+  var freshness = residualFreshness(residual, known);
+  var newNodes = 0, newEdges = 0;
+  after.ids.forEach(function(n){ if (before.unc[n.label] === undefined) newNodes++; });
+  after.edges.forEach(function(k){ if (!before.edges.has(k)) newEdges++; });
+  var structure = Math.min(1, (newNodes + 0.5 * newEdges) / 4);
+  var conflict = Math.min(1, Math.max(0, after.contra - before.contra));
+  var total = Math.max(0, Math.min(1,
+    W_REVISION * revision + W_FRESHNESS * freshness +
+    W_STRUCTURE * structure + W_CONFLICT * conflict));
+  return { revision: revision, freshness: freshness, structure: structure,
+           conflict: conflict, total: total };
+}
 
 /* ── กราฟความรู้ ──────────────────────────────────────────────── */
 var MAX_LABEL = 46;
@@ -447,6 +523,25 @@ Graph.prototype.holes = function(k){
       if (top[i].level === top[j].level && !this.reach(top[i], top[j], 3)) out.push([top[i], top[j]]);
   return out;
 };
+/* สิ่งเดียวที่มีคำอธิบายมากกว่าหนึ่งอันอ้างสิทธิ์อยู่ — แหล่งนี้ถูกเพิ่ม
+   หลังจากระบบตอบคำถามของตัวเองว่ามันถาม "อันไหนดีกว่า" ไม่ได้เลย */
+Graph.prototype.rivals = function(k){
+  var parents = new Map();
+  for (var i = 0; i < this.edges.length; i++){
+    var e = this.edges[i];
+    if (e.rel === "explains" || e.rel === "causes" || e.rel === "abstracts"){
+      if (!parents.has(e.t)) parents.set(e.t, []);
+      parents.get(e.t).push(e.s);
+    }
+  }
+  var out = [], g = this;
+  parents.forEach(function(rs, target){
+    if (rs.length < 2) return;
+    rs.sort(function(a, b){ return b.conf - a.conf; });
+    out.push([target, rs[0], rs[1]]);
+  });
+  return out.sort(function(a, b){ return g.unc(b[0]) - g.unc(a[0]); }).slice(0, k);
+};
 Graph.prototype.residuals = function(k){
   var g = this, out = [];
   this.nodes.forEach(function(n){
@@ -478,13 +573,14 @@ Graph.prototype.stats = function(){
 };
 
 /* ── ยุทธวิธี: คำถามในฐานะ *ข้อมูล* ที่กลายพันธุ์ได้ ────────────── */
-var SOURCES = ["frontier","unexplained","contradiction","hole","residual","self"];
+var SOURCES = ["frontier","unexplained","contradiction","hole","residual","self","comparison"];
 var REQUIRED = { frontier:["a"], unexplained:["a"], contradiction:["a","b"],
-                 hole:["a","b"], residual:["a","residual"], self:["limit"] };
+                 hole:["a","b"], residual:["a","residual"], self:["limit"],
+                 comparison:["a","b","c"] };
 
 function S(name, level, source, templates, o){
   var s = { name:name, level:level, source:source, templates:templates, gen:0, lineage:[],
-            born:0, fitness:0.5, uses:0, origin:"builtin" };
+            born:0, fitness:0.5, uses:0, offered:0, origin:"builtin" };
   if (o) for (var k in o) s[k] = o[k];
   return s;
 }
@@ -522,6 +618,14 @@ function builtins(){
       "{a} เป็นสิ่งที่มีอยู่จริง หรือเป็นหมวดหมู่ที่ผู้สังเกตสร้างขึ้นเพื่อความสะดวก?",
       "ถ้าไม่มีใครมองอยู่ {a} ยังเป็น {a} อยู่หรือไม่ และคำถามนี้มีความหมายหรือเปล่า?",
       "ขอบเขตของ {a} สิ้นสุดตรงไหน และใครเป็นคนตัดสินว่าตรงนั้นคือขอบ?"]),
+    S("comparative_probe", 2, "comparison", [
+      "{b} กับ {c} ต่างอ้างว่าอธิบาย {a} ได้ — อันไหนอธิบายได้มากกว่า และวัดด้วยอะไร?",
+      "ถ้า {b} ถูก {c} จะเหลือบทบาทอะไรกับ {a}?",
+      "อะไรที่ {b} อธิบาย {a} ได้ แต่ {c} อธิบายไม่ได้ — และกลับกัน?"]),
+    S("degree_probe", 1, "frontier", [
+      "{a} มีได้มากน้อยแค่ไหน และวัดเป็นหน่วยอะไร?",
+      "อะไรคือค่าที่น้อยที่สุดและมากที่สุดที่ {a} ยังเป็น {a} อยู่?",
+      "{a} เปลี่ยนแบบต่อเนื่อง หรือกระโดดเป็นขั้น?"]),
     S("self_reference_probe", 5, "self", [
       "ระบบนี้มีข้อจำกัด “{limit}” — ข้อจำกัดนั้นทำให้มันมองไม่เห็นคำถามแบบไหน?",
       "ระบบตรวจพบ “{limit}” ได้ด้วยเครื่องมือเดิม หรือจำเป็นต้องสร้างเครื่องมือใหม่?",
@@ -531,7 +635,7 @@ function builtins(){
 
 var PRE = ["ในกรณีที่สุดขั้วที่สุด ","ถ้ามองย้อนกลับด้าน ","โดยไม่ใช้คำศัพท์เดิมเลย ","ถ้าจำกัดให้ตอบด้วยสิ่งที่วัดได้เท่านั้น "];
 var SUF = [" และคำตอบนั้นจะผิดได้ด้วยเงื่อนไขอะไร?"," แล้วอะไรที่คำตอบนั้นยังปล่อยทิ้งไว้?"," ใครจะไม่เห็นด้วยกับคำตอบนี้ และด้วยเหตุผลอะไร?"];
-var SLOTS = ["{a}","{b}","{residual}","{limit}"];
+var SLOTS = ["{a}","{b}","{c}","{residual}","{limit}"];
 
 function retarget(templates, source){
   var req = REQUIRED[source], ok = {};
@@ -637,16 +741,16 @@ function investigate(q, g, rnd){
 /* ── แบบจำลองที่ระบบมีต่อตัวเอง ──────────────────────────────── */
 var GAP_ROUTE = { recurrence:[3,"residual"], stagnation:[5,"self"], saturation:[4,"hole"],
                   unresolved:[2,"contradiction"], monoculture:[3,"frontier"],
-                  coverage:[0,"frontier"], resource:[5,"self"] };
+                  coverage:[0,"frontier"], resource:[5,"self"], exhaustion:[5,"self"] };
 
 function SelfModel(){
-  this.uHist = []; this.nHist = []; this.nodeHist = []; this.cHist = [];
+  this.uHist = []; this.nHist = []; this.gHist = []; this.nodeHist = []; this.cHist = [];
   this.resAge = new Map(); this.stratUse = new Map(); this.lvUse = [0,0,0,0,0,0];
   this.seen = new Map();
 }
-SelfModel.prototype.observe = function(stats, levels, strategies, novelty, residuals){
+SelfModel.prototype.observe = function(stats, levels, strategies, novelty, residuals, gain){
   var self = this;
-  this.uHist.push(stats.meanU); this.nHist.push(novelty);
+  this.uHist.push(stats.meanU); this.nHist.push(novelty); this.gHist.push(gain || 0);
   this.nodeHist.push(stats.nodes); this.cHist.push(stats.contradictions);
   strategies.forEach(function(s){ self.stratUse.set(s, (self.stratUse.get(s) || 0) + 1); });
   levels.forEach(function(l){ self.lvUse[l]++; });
@@ -683,6 +787,15 @@ SelfModel.prototype.detect = function(epoch, budget){
     if (avg < 0.45) found.push({ kind:"saturation",
       text:"ความใหม่เฉลี่ยของคำถามตกไปที่ " + avg.toFixed(2) + " — พื้นที่คำถามเดิมใกล้ถูกกินหมด",
       sev:0.75 });
+  }
+  /* เครื่องมือสืบค้นหมดสภาพ — ข้อจำกัดที่อยู่นอกตัวคำถามทั้งหมด */
+  if (this.gHist.length >= W){
+    var tg = this.gHist.slice(-W);
+    var avgG = tg.reduce(function(a, b){ return a + b; }, 0) / tg.length;
+    if (avgG < 0.08) found.push({ kind:"exhaustion",
+      text:"ความประหลาดใจเฉลี่ยตกไปที่ " + avgG.toFixed(3) + " ต่อเนื่อง " + W +
+           " รอบ — คำถามยังใหม่อยู่ แต่คำตอบไม่เปลี่ยนแบบจำลองอีกแล้ว " +
+           "คอขวดอยู่ที่ตัวสืบค้น ไม่ใช่ที่วิธีถาม", sev:0.9 });
   }
   if (this.cHist.length >= W){
     var tc = this.cHist.slice(-W);
@@ -760,26 +873,52 @@ Population.prototype.credit = function(o){
     s.fitness = 0.65 * s.fitness + 0.35 * Math.max(0, Math.min(1, o[n]));
   }
 };
+/* ยุทธวิธีที่ไม่ถูกเลือกจะจางลง แต่ *ช้ามาก* — เดิมใช้ 0.97 ต่อรอบ ซึ่งใน
+   ประชากร 20 ตัวที่เลือกได้รอบละ 3 ลากทุกตัวลงต่ำกว่าเกณฑ์ปลดระวางภายใน
+   ร้อยรอบ ทั้งที่ไม่มีตัวไหนเคยแพ้การวัดจริง การสำรวจเป็นหน้าที่ของ UCB แล้ว */
 Population.prototype.decay = function(used){
-  this.map.forEach(function(s, n){ if (!used.has(n)) s.fitness *= 0.97; });
+  this.map.forEach(function(s, n){ if (!used.has(n)) s.fitness *= 0.995; });
+};
+Population.prototype.exploreBonus = function(name){
+  var s = this.map.get(name);
+  if (!s) return 0;
+  var total = 0;
+  this.map.forEach(function(x){ total += x.uses; });
+  return 0.16 * Math.sqrt(Math.log(total + 2) / (s.uses + 1));
 };
 Population.prototype.evolve = function(epoch, gaps, reward){
   var self = this, rnd = this.rnd, born = [], retired = [];
   this.gen++;
+  // เครื่องมือจากจุดบอดมีค่า แต่ถ้าปล่อยเรื่อย ๆ มันกินประชากรจนไม่เหลือ
+  // หัววัดชนิดอื่น (วัดได้ 14 จาก 20) จำกัดโควตาแล้วสลับตัวอ่อนสุดออกแทน
+  var quota = Math.max(2, Math.floor(this.max * 2 / 5));
   gaps.forEach(function(g){
     var s = fromGap(g.text, g.level, g.source, epoch);
-    if (!self.map.has(s.name)){ self.map.set(s.name, s); born.push(s.name); }
+    if (self.map.has(s.name)) return;
+    var existing = self.live().filter(function(x){ return x.origin === "capability-gap"; });
+    if (existing.length >= quota){
+      var weakest = existing.sort(function(a, b){ return a.fitness - b.fitness; })[0];
+      if (weakest.fitness >= s.fitness) return;
+      self.map.delete(weakest.name); retired.push(weakest.name);
+    }
+    self.map.set(s.name, s); born.push(s.name);
   });
   var ranked = this.live().sort(function(a, b){ return b.fitness - a.fitness; });
+  var fits = ranked.map(function(s){ return s.fitness; }).sort(function(a, b){ return a - b; });
+  var median = fits.length ? fits[Math.floor(fits.length / 2)] : 0.5;
+  /* ลูกใหม่รับ fitness จากพ่อแม่โดยยังไม่เคยถูกวัดเลย ส่วนตัวที่ทำงานมาแล้ว
+     ถือคะแนนที่วัดได้จริงซึ่งมักต่ำกว่า ถ้าไม่กด ประชากรจะทิ้งตัวที่ถูกวัด
+     ไปก่อนตัวที่ยังไม่เคยพิสูจน์ตัวเอง */
+  function temper(c){ c.fitness = Math.min(c.fitness, median); return c; }
   if (ranked.length && this.map.size < this.max){
     var parent = pick(ranked.slice(0, Math.max(1, Math.floor(ranked.length / 3))), rnd);
-    var c1 = mutate(parent, rnd, epoch);
+    var c1 = temper(mutate(parent, rnd, epoch));
     if (!this.map.has(c1.name)){ this.map.set(c1.name, c1); born.push(c1.name); }
   }
   if (ranked.length >= 2 && this.map.size < this.max){
     var a = ranked[0], base = rootOf(a);
     var b = ranked.slice(1).filter(function(s){ return rootOf(s) !== base; })[0] || ranked[1];
-    var c2 = cross(a, b, rnd, epoch);
+    var c2 = temper(cross(a, b, rnd, epoch));
     if (!this.map.has(c2.name)){ this.map.set(c2.name, c2); born.push(c2.name); }
   }
   /* ปลดระวาง — แต่ห้ามทำให้ระดับคำถามใดหายไปทั้งระดับ */
@@ -790,8 +929,10 @@ Population.prototype.evolve = function(epoch, gaps, reward){
     return same.length > 1;
   }
   this.live().sort(function(a, b){ return a.fitness - b.fitness; }).forEach(function(s){
-    var failed = s.uses >= 3 && s.fitness < 0.22;
-    var stale = s.uses === 0 && epoch - s.born >= 8;
+    var failed = s.uses >= 3 && s.fitness < 0.16;
+    // นับจากโอกาส ไม่ใช่จากอายุ: comparative_probe ต้องรอจนกราฟมีคำอธิบาย
+    // ที่แข่งกันก่อนถึงจะมีอะไรให้ถาม การนับตามอายุตัดมันทิ้งก่อนได้ลงสนาม
+    var stale = s.uses === 0 && s.offered >= 8;
     if ((failed || stale) && canDrop(s)) drop.add(s.name);
   });
   while (this.map.size - drop.size > this.max){
@@ -823,7 +964,8 @@ function Spiral(topic, seed){
   this.budget = { maxNodes: 150, nodes: 0 };
   this.epoch = 0; this.k = 3; this.questions = []; this.pending = [];
   this.lastBorn = []; this.limits = []; this.ceilingHit = null;
-  this.saturated = false; this.lastNovelty = 0;
+  this.saturated = false; this.lastNovelty = 0; this.lastGain = 0;
+  this.focus = null; this.lastMigration = -8; this.thin = 0; this.migrated = null;
   this.g.add(topic, { status:"UNKNOWN", epoch:0 });
 }
 Spiral.prototype.slots = function(source, limits){
@@ -839,8 +981,9 @@ Spiral.prototype.slots = function(source, limits){
     }
     return out;
   }
-  function nw(n){ return g.unc(n) + 0.1; }
-  function pw(p){ return g.unc(p[0]) + 0.1; }
+  var focus = this.focusIds();
+  function nw(n){ return g.unc(n) + 0.1 + (focus.has(n) ? 0.7 : 0); }
+  function pw(p){ return nw(p[0]); }
   if (source === "frontier")
     return sample(g.frontier(WIDE), nw).map(function(n){ return { a:n.label, t:n }; });
   if (source === "unexplained")
@@ -854,9 +997,53 @@ Spiral.prototype.slots = function(source, limits){
   if (source === "residual")
     return sample(g.residuals(WIDE), pw)
       .map(function(p){ return { a:p[0].label, residual:p[1], t:p[0] }; });
+  if (source === "comparison")
+    return sample(g.rivals(WIDE), pw).map(function(p){
+      return { a:p[0].label, b:p[1].label, c:p[2].label, t:p[0] };
+    });
   if (source === "self")
     return limits.slice(0, 8).map(function(l){ return { limit:l, subject:SELF_NODE }; });
   return [];
+};
+Spiral.prototype.focusIds = function(){
+  var out = new Set();
+  if (!this.focus) return out;
+  out.add(this.focus);
+  this.g.neighbours(this.focus).forEach(function(m){
+    out.add(m);
+  });
+  return out;
+};
+/* ย่านตันแล้วให้ย้ายไปย่านใหม่ที่ตัวระบบเองชี้ว่ามีของมากที่สุด — แต่ต้องมี
+   ความหน่วง ลองปล่อยให้ย้ายได้ทุกรอบแล้ววัดได้ว่ามันยิง 102/150 ครั้ง
+   ก้นหอยไม่เคยอยู่ที่ไหนนานพอจะขุดถึงก้น ผลแย่กว่าการสุ่มทั่วกราฟ */
+Spiral.prototype.migrate = function(){
+  var self = this, near = this.focusIds();
+  if (this.focus){
+    var exhausted = this.thin >= 3;
+    if (!exhausted && this.epoch - this.lastMigration < 8) return null;
+    var worked = 0;
+    near.forEach(function(n){ worked += n.visits; });
+    if (!exhausted && worked < 4) return null;
+    if (!exhausted){
+      var stuck = this.limits.filter(function(l){
+        return (l.kind === "saturation" || l.kind === "stagnation" ||
+                l.kind === "exhaustion") && (l.age || 1) >= 2;
+      });
+      if (!stuck.length) return null;
+    }
+  }
+  var pool = this.g.list().filter(function(n){ return !near.has(n); });
+  if (!pool.length) return null;
+  var best = pool.reduce(function(a, b){
+    var sa = self.g.unc(a) * (1 + 0.4 * a.residuals.length) + (a.visits ? 0 : 0.25);
+    var sb = self.g.unc(b) * (1 + 0.4 * b.residuals.length) + (b.visits ? 0 : 0.25);
+    return sb > sa ? b : a;
+  });
+  if (best === this.focus) return null;
+  var first = !this.focus;
+  this.focus = best; this.lastMigration = this.epoch; this.thin = 0;
+  return first ? null : best.label;
 };
 Spiral.prototype.step = function(){
   var g = this.g, rnd = this.rnd, self = this, i;
@@ -870,11 +1057,12 @@ Spiral.prototype.step = function(){
   this.pop.live().forEach(function(s){
     var slots = self.slots(s.source, limTexts);
     if (!slots.length) return;
+    s.offered++;
     var tmpl = s.templates.slice().sort(function(){ return rnd() - 0.5; }).slice(0, 2);
     tmpl.forEach(function(t){
       slots.slice(0, 3).forEach(function(sl){
         var text = t;
-        ["a","b","residual","limit"].forEach(function(key){
+        ["a","b","c","residual","limit"].forEach(function(key){
           text = text.split("{" + key + "}").join(sl[key] !== undefined ? sl[key] : "");
         });
         if (!text.trim() || text.indexOf("{") >= 0) return;
@@ -885,30 +1073,39 @@ Spiral.prototype.step = function(){
   });
 
   /* คัดเลือก Q* = argmax(w_u·U + w_c·C + w_n·N) */
-  var w = this.pop.w, seenSig = new Set(), scored = [];
+  var w = this.pop.w, seenSig = new Set(), seenConcept = new Set(), scored = [];
   cands.forEach(function(q){
     var sig = norm(q.text);
     if (seenSig.has(sig) || self.led.seen(q.text)) return;
+    var concept = conceptOf(q);
+    if (!q.forced && (self.led.seenConcept(q) || seenConcept.has(concept))) return;
     seenSig.add(sig);
+    if (q.target) seenConcept.add(concept);
     var U = q.target ? g.localU(q.target) : 0.9;
     var C = q.target ? g.localC(q.target) : 0.3;
     C = Math.min(1, C + 0.25 * (q.level / 5));
     var N = self.led.novelty(q.text) * (0.6 + 0.4 * self.led.rarity(q.level));
     if (N < 0.35 && !q.forced) return;
-    scored.push({ q:q, U:U, C:C, N:N, total: w.u * U + w.c * C + w.n * N });
+    var total = w.u * U + w.c * C + w.n * N + self.pop.exploreBonus(q.strategy);
+    scored.push({ q:q, U:U, C:C, N:N, total: total });
   });
-  scored.sort(function(a, b){ return b.total - a.total; });
+  // คำถามที่ถูกบังคับ (มนุษย์ถามเอง) ไม่ได้แข่งกับคำถามที่เครื่องสร้าง
+  scored.sort(function(a, b){
+    if (!!a.q.forced !== !!b.q.forced) return a.q.forced ? -1 : 1;
+    return b.total - a.total;
+  });
 
   var chosen = [], chosenSh = [];
   for (i = 0; i < scored.length && chosen.length < this.k; i++){
     var sh = shingles(scored[i].q.text);
-    var dup = chosenSh.some(function(p){ return jaccard(sh, p) > 0.55; });
-    if (dup) continue;
+    if (!scored[i].q.forced && chosenSh.some(function(p){ return jaccard(sh, p) > 0.55; }))
+      continue;
     chosen.push(scored[i]); chosenSh.push(sh);
   }
 
   /* กฎข้อ 3 — ตันแล้วให้ถามถึงความตัน */
-  this.saturated = chosen.length < this.k;
+  this.thin = chosen.length < this.k ? this.thin + 1 : 0;
+  this.saturated = chosen.length === 0;
   if (this.saturated){
     var stuck = limTexts[0] || "พื้นที่คำถามชุดเดิมถูกใช้จนหมด";
     var shapes = [
@@ -918,21 +1115,24 @@ Spiral.prototype.step = function(){
         "โครงสร้างแบบไหนที่จะทำให้คำถามใหม่กลับมาเป็นไปได้?",
       "[รอบ " + this.epoch + "] อะไรที่ระบบนับว่าไม่ใช่คำถามโดยอัตโนมัติ และการนับแบบนั้นตัดอะไรทิ้งไปบ้าง?"
     ];
-    var need = this.k - chosen.length;
-    for (i = 0; i < Math.min(need, shapes.length); i++)
-      chosen.push({ q:{ text: shapes[i], level:5, strategy:"saturation-escape", target:null,
-                        subject:SELF_NODE, epoch:this.epoch, forced:true },
-                    U:1, C:0.6, N:1, total:1 });
+    // ผูกกับ "พื้นที่คำถาม" ไม่ใช่ node ของตัวระบบ: ลองผูกกับตัวระบบแล้ววัดได้
+    // ว่ากราฟยุบจาก 308 เหลือ 80 node และคำถามที่พับกลับหาตัวเองพุ่งเป็น 65%
+    chosen.push({ q:{ text: shapes[this.epoch % shapes.length], level:5,
+                      strategy:"saturation-escape", target:null,
+                      subject:"พื้นที่คำถามของระบบ", epoch:this.epoch, forced:true },
+                  U:1, C:0.6, N:1, total:1 });
   }
 
   /* สืบค้น แล้วผนวกกลับเข้ากราฟ */
-  var outcomes = {}, earned = [];
+  var outcomes = {}, earned = [], gains = [];
   chosen.forEach(function(s){
     var q = s.q;
     self.led.record(q);
     if (!q.target && q.subject)
       q.target = g.add(q.subject, { status:"UNKNOWN", level:q.level, epoch:self.epoch });
 
+    var before = snapshot(g, [q.target]);
+    var known = knownResiduals(g);
     var f = investigate(q, g, rnd);
     var n0 = g.nodes.size;
     f.nodes.forEach(function(nd){
@@ -957,31 +1157,37 @@ Spiral.prototype.step = function(){
     g.add(res, { status:"UNKNOWN", level: Math.min(5, q.level + 1), epoch:self.epoch });
     if (q.target) g.link(res, q.target.label, "unknown_link");
 
-    var added = g.nodes.size - n0;
-    var yieldScore = Math.max(0, Math.min(1, 0.35 * s.N + 0.25 * Math.min(1, added / 2) +
-                                             0.25 * f.contradicted + 0.1 * s.U + 0.05 * f.conf));
+    var gain = measureGain(before, g, [q.target], res, known);
+    // ความใหม่เชิงคำยังมีที่ยืน แต่เป็นส่วนน้อย — สิ่งที่ตัดสินคือคำถามนี้
+    // เปลี่ยนแบบจำลองไปได้จริงแค่ไหน
+    var yieldScore = Math.max(0, Math.min(1, 0.8 * gain.total + 0.2 * s.N));
+    gains.push(gain.total);
     if (!outcomes[q.strategy]) outcomes[q.strategy] = [];
     outcomes[q.strategy].push(yieldScore);
     if (!q.forced) earned.push(s.N);
     self.questions.push({ text:q.text, level:q.level, epoch:self.epoch, residual:res,
-                          answer:f.answer, target:q.target, forced: !!q.forced });
+                          answer:f.answer, target:q.target, forced: !!q.forced, gain:gain });
   });
 
   var after = g.stats();
   /* คำถามหนีความอิ่มตัวมีเลขรอบอยู่ในตัว จึงใหม่ 100% เสมอ — ถ้านับรวม
      ระบบจะรายงานว่าตัวเองสร้างสรรค์เต็มร้อยในรอบที่มันตันสนิท */
   var novelty = earned.length ? earned.reduce(function(a, b){ return a + b; }, 0) / earned.length : 0;
+  var gainMean = gains.length ? gains.reduce(function(a, b){ return a + b; }, 0) / gains.length : 0;
   var grew = (after.nodes - before.nodes) / Math.max(1, before.nodes);
   var resolved = before.meanU - after.meanU;
   var surfaced = (after.contradictions - before.contradictions) * 0.1;
-  var reward = 0.3 * Math.min(1, grew) + 0.3 * Math.max(-1, Math.min(1, resolved * 4)) +
-               0.25 * Math.min(1, surfaced) + 0.15 * novelty;
+  // รางวัลยึดกับความประหลาดใจที่วัดได้จริง ตัวเลขระดับกราฟเป็นแค่สมอ
+  var reward = 0.65 * gainMean + 0.35 * (
+    0.3 * Math.min(1, grew) + 0.3 * Math.max(-1, Math.min(1, resolved * 4)) +
+    0.25 * Math.min(1, surfaced) + 0.15 * novelty);
 
   this.sm.observe(after,
     chosen.map(function(s){ return s.q.level; }),
     chosen.map(function(s){ return s.q.strategy; }),
     novelty,
-    g.residuals(32).map(function(p){ return p[1]; }));
+    g.residuals(32).map(function(p){ return p[1]; }),
+    gainMean);
 
   var avg = {};
   for (var name in outcomes)
@@ -993,6 +1199,8 @@ Spiral.prototype.step = function(){
 
   this.budget.nodes = after.nodes;
   this.lastNovelty = novelty;
+  this.lastGain = gainMean;
+  this.migrated = this.migrate();
   this.epoch++;
   return after;
 };
@@ -1031,6 +1239,7 @@ function resize(){
   W = window.innerWidth; H = window.innerHeight;
   cv.width = W * DPR; cv.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  document.getElementById("ceiling").style.left = centerX() + "px";
 }
 window.addEventListener("resize", resize);
 resize();
@@ -1170,29 +1379,51 @@ function draw(){
       ctx.fillText(LV[l], R + 12, y + 3.5);
     }
 
-    /* เส้นด้ายของการถาม — จางที่อดีต สว่างที่ปัจจุบัน */
+    /* เส้นด้ายของการถาม
+       หนึ่งเกลียวต่อหนึ่งระดับ ไม่ใช่เส้นเดียวลากรวดทุกจุด: คำถามที่อยู่
+       ติดกันตามเวลามักอยู่คนละระดับ การลากเส้นเดียวจึงได้ซิกแซกตวัดขึ้นลง
+       ไม่ใช่ก้นหอย  แยกเป็นเกลียวต่อระดับแล้วโยงเส้นบาง ๆ ตรงที่มันไต่ข้ามชั้น
+       ทำให้เห็นทั้ง "ทำงานหนักที่ระดับไหน" และ "กระโดดข้ามชั้นตอนไหน" */
     var pts = [];
     for (i = 0; i < qs.length; i++){
       var pp = spiralPos(i, total);
       pts.push({ x: pp.x, y: pp.y + LEVEL_BASE - qs[i].level * LEVEL_RISE, lv: qs[i].level });
     }
-    ctx.lineWidth = 1.3;
+
+    /* เส้นไต่ข้ามชั้น — วาดก่อนเพื่อให้อยู่หลังเกลียว */
+    ctx.lineWidth = 1;
     for (i = 1; i < pts.length; i++){
+      if (pts[i].lv === pts[i - 1].lv) continue;
       ctx.beginPath();
       ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
       ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = "#F2A33C";
-      ctx.globalAlpha = sA * (0.07 + 0.33 * (i / pts.length));
+      ctx.strokeStyle = "#8A90AD";
+      ctx.globalAlpha = sA * (0.05 + 0.13 * (i / pts.length));
       ctx.stroke();
+    }
+
+    /* เกลียวของแต่ละระดับ */
+    ctx.lineWidth = 1.4;
+    for (var lv = 0; lv < 6; lv++){
+      var chain = [];
+      for (i = 0; i < pts.length; i++) if (pts[i].lv === lv) chain.push({ p: pts[i], i: i });
+      for (var c = 1; c < chain.length; c++){
+        ctx.beginPath();
+        ctx.moveTo(chain[c - 1].p.x, chain[c - 1].p.y);
+        ctx.lineTo(chain[c].p.x, chain[c].p.y);
+        ctx.strokeStyle = LV_COLOR[lv];
+        ctx.globalAlpha = sA * (0.12 + 0.40 * (chain[c].i / pts.length));
+        ctx.stroke();
+      }
     }
 
     /* จุดคำถาม */
     for (i = 0; i < pts.length; i++){
       var age = i / Math.max(1, pts.length - 1);
-      var rr = 2.0 + age * 3.0;
+      var rr = 1.9 + age * 2.8;
       ctx.beginPath(); ctx.arc(pts[i].x, pts[i].y, rr, 0, 6.2832);
       ctx.fillStyle = LV_COLOR[pts[i].lv];
-      ctx.globalAlpha = sA * (0.28 + 0.72 * age);
+      ctx.globalAlpha = sA * (0.3 + 0.7 * age);
       ctx.fill();
     }
     /* คำถามล่าสุด — จุดที่ก้นหอยกำลังอยู่ */
@@ -1258,12 +1489,16 @@ function renderPanels(){
   c.textContent = st.contradictions;
   c.classList.toggle("hot", st.contradictions > 0);
   $("r-q").textContent = sp.led.sigs.size;
-  $("r-nov").textContent = sp.lastNovelty.toFixed(2);
+  var gEl = $("r-gain");
+  gEl.textContent = sp.lastGain.toFixed(2);
+  gEl.style.color = sp.lastGain < 0.08 ? "#E5484D" : sp.lastGain > 0.35 ? "#4FD1C5" : "";
   $("r-s").textContent = sp.pop.map.size;
   $("genlab").textContent = "gen " + sp.pop.gen;
   var sf = $("satflag");
-  sf.textContent = sp.saturated ? "อิ่มตัว → ถามถึงความอิ่มตัว" : "";
-  sf.style.color = sp.saturated ? "#4FD1C5" : "";
+  if (sp.saturated){ sf.textContent = "อิ่มตัว → ถามถึงความอิ่มตัว"; sf.style.color = "#4FD1C5"; }
+  else if (sp.migrated){ sf.textContent = "⇢ อพยพย่าน: " + sp.migrated; sf.style.color = "#F2A33C"; }
+  else if (sp.focus){ sf.textContent = "ย่าน: " + sp.focus.label; sf.style.color = "#5A6081"; }
+  else { sf.textContent = ""; }
 
   $("qlist").innerHTML = sp.questions.slice(-26).reverse().map(function(q){
     return '<div class="q' + (q.level === 5 ? " self" : "") + (q.forced ? " forced" : "") +
@@ -1271,7 +1506,10 @@ function renderPanels(){
       '<div class="meta"><span class="lv" style="color:' + LV_COLOR[q.level] + '">' + LV[q.level] + "</span>" +
       '<span class="ep">รอบ ' + q.epoch + "</span></div>" +
       '<div class="txt">' + esc(q.text) + "</div>" +
-      '<div class="res">' + esc(q.residual) + "</div></div>";
+      '<div class="res">' + esc(q.residual) +
+      (q.gain ? '<span class="g">แก้ความเชื่อเดิม ' + q.gain.revision.toFixed(2) +
+                ' · เศษใหม่จริง ' + q.gain.freshness.toFixed(2) + "</span>" : "") +
+      "</div></div>";
   }).join("");
 
   $("poplist").innerHTML = sp.pop.live().sort(function(a, b){ return b.fitness - a.fitness; })
