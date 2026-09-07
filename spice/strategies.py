@@ -23,6 +23,11 @@ from .types import QuestionLevel, stable_id
 WIDE = 48
 NARROW = 8
 
+# คำถามที่คนอ่านไม่ไหวไม่ใช่คำถาม การผสมข้ามเชื่อมแม่แบบสองอันเข้าด้วยกัน
+# ซึ่งอ่านได้ตอนชื่อ node สั้น แต่พอเป้าหมายเป็นวลียาว 60 ตัวอักษรที่ถูกแทน
+# ซ้ำสามครั้ง ผลลัพธ์คือประโยคยาวสองบรรทัดครึ่งที่ไม่มีใครตอบได้
+MAX_QUESTION = 190
+
 SOURCES = (
     "frontier",        # node ที่ไม่แน่นอนที่สุด
     "unexplained",     # node ที่ไม่มีอะไรอธิบาย
@@ -81,7 +86,7 @@ class Strategy:
         for tmpl in templates:
             for slot in slots[: ctx.budget_per_strategy]:
                 text = _render(tmpl, slot)
-                if not text:
+                if not text or len(text) > MAX_QUESTION:
                     continue
                 q = Question(
                     text=text,
@@ -188,32 +193,54 @@ def _node_slot(n: Node) -> dict[str, Any]:
     return {"a": n.label, "status": n.status.value, "_ids": (n.id,), "_subject": n.label}
 
 
+def _is_self(n: Node) -> bool:
+    """node ที่เป็นส่วนของแบบจำลองที่ระบบมีต่อ *ตัวเอง* ไม่ใช่ต่อหัวข้อ."""
+    return "self" in n.tags or n.label == SELF_NODE or n.label.endswith(SELF_NODE)
+
+
 def _collect_slots(source: str, ctx: GenerationContext) -> list[dict[str, Any]]:
     g = ctx.graph
+    # แบบจำลองของตัวระบบอยู่ในกราฟเดียวกับความรู้เรื่องโลก ซึ่งดีสำหรับการที่
+    # มันตั้งคำถามกับตัวเองได้ด้วยเครื่องมือชุดเดียวกัน แต่ถ้าปล่อยให้หัววัด
+    # ระดับหัวข้อหยิบ node เหล่านั้นไปด้วย มันจะเอา "กระบวนการที่ผลิตระบบผู้ถามเอง"
+    # ไปเทียบกับเศษเรื่องร้านกาแฟ — ผลาญรอบของคนที่กำลังใช้มันคิดเรื่องจริงอยู่
+    # ระบบถามถึงตัวเองผ่านแหล่ง "self" เท่านั้น
+    def topical(nodes):
+        return [n for n in nodes if not _is_self(n)]
+
     if source == "frontier":
-        return [_node_slot(n) for n in _sample(g.frontier(WIDE), ctx, NARROW)]
+        return [_node_slot(n) for n in _sample(topical(g.frontier(WIDE)), ctx, NARROW)]
     if source == "unexplained":
-        return [_node_slot(n) for n in _sample(g.unexplained()[:WIDE], ctx, NARROW)]
+        return [_node_slot(n) for n in _sample(topical(g.unexplained())[:WIDE], ctx, NARROW)]
     if source == "contradiction":
         return [
             {"a": a.label, "b": b.label, "_ids": (a.id, b.id), "_subject": a.label}
-            for a, b in _sample(g.contradiction_pairs()[:WIDE], ctx, NARROW)
+            for a, b in _sample(
+                [p for p in g.contradiction_pairs() if not (_is_self(p[0]) or _is_self(p[1]))][:WIDE],
+                ctx, NARROW,
+            )
         ]
     if source == "hole":
         return [
             {"a": a.label, "b": b.label, "_ids": (a.id, b.id), "_subject": a.label}
-            for a, b in _sample(g.structural_holes(WIDE // 2), ctx, NARROW)
+            for a, b in _sample(
+                [p for p in g.structural_holes(WIDE // 2) if not (_is_self(p[0]) or _is_self(p[1]))],
+                ctx, NARROW,
+            )
         ]
     if source == "residual":
         return [
             {"a": n.label, "residual": r, "_ids": (n.id,), "_subject": n.label}
-            for n, r in _sample(g.open_residuals(WIDE), ctx, NARROW)
+            for n, r in _sample(
+                [p for p in g.open_residuals(WIDE) if not _is_self(p[0])], ctx, NARROW
+            )
         ]
     if source == "comparison":
         return [
             {"a": t.label, "b": r1.label, "c": r2.label,
              "_ids": (t.id, r1.id, r2.id), "_subject": t.label}
             for t, r1, r2 in g.rival_explanations(8)
+            if not _is_self(t)
         ]
     if source == "self":
         # คำถามถึงตัวเองผูกกับ node เดียวเสมอ — ระบบจึงสะสม *แบบจำลอง
@@ -368,12 +395,12 @@ def builtin_strategies() -> list[Strategy]:
             templates={
                 "th": [
                     "{a} เป็นสิ่งที่มีอยู่จริง หรือเป็นหมวดหมู่ที่ผู้สังเกตสร้างขึ้นเพื่อความสะดวก?",
-                    "ถ้าไม่มีใครมองอยู่ {a} ยังเป็น {a} อยู่หรือไม่ และคำถามนี้มีความหมายหรือเปล่า?",
+                    "{a} เป็นสิ่งเดียว หรือเป็นหลายสิ่งที่ถูกเรียกรวมกันด้วยชื่อเดียว?",
                     "ขอบเขตของ {a} สิ้นสุดตรงไหน และใครเป็นคนตัดสินว่าตรงนั้นคือขอบ?",
                 ],
                 "en": [
                     "Is {a} a real thing, or a category the observer built for convenience?",
-                    "With nobody observing, is {a} still {a} — and is that question even meaningful?",
+                    "Is {a} one thing, or several things collected under one name?",
                     "Where does {a} end, and who decides that is the boundary?",
                 ],
             },
@@ -518,6 +545,9 @@ def cross_strategies(
     level = QuestionLevel(
         min(int(QuestionLevel.SELF_REFERENCE), max(int(a.level), int(b.level)) + 1)
     )
+
+    def slot_hits(t: str) -> int:
+        return sum(t.count(tok) for tok in _SLOT_TOKENS)
     source = a.source if rng.random() < 0.5 else b.source
     templates: dict[str, list[str]] = {}
     for lang in set(a.templates) & set(b.templates):
@@ -534,10 +564,13 @@ def cross_strategies(
         pool = []
         for ta in a.templates[lang][:2]:
             for tb in b.templates[lang][:2]:
+                if slot_hits(ta) + slot_hits(tb) > 3:
+                    continue     # ยาวเกินกว่าจะอ่านรู้เรื่องเมื่อแทนค่าจริง
                 pool.append(ta.rstrip("?").rstrip() + joiner + tb.rstrip("?").rstrip() + tail)
-        templates[lang] = pool[:4]
+        if pool:
+            templates[lang] = pool[:4]
     if not templates:
-        templates = dict(a.templates)
+        templates = {k: list(v) for k, v in a.templates.items()}
     templates = _retarget_templates(templates, None, source)
     name = f"{_base_name(a.name)}×{_base_name(b.name)}@g{max(a.generation, b.generation) + 1}"
     return Strategy(

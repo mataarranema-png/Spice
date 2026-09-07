@@ -1,0 +1,331 @@
+<title>ทำไมร้านกาแฟตายในปีแรก</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+<style>
+/* ─────────────────────────────────────────────────────────────
+   ผลลัพธ์จากก้นหอยคำถาม — เอกสารอ่าน ไม่ใช่หน้าจอเครื่องมือ
+   จึงเป็นกระดาษ ไม่ใช่หอสังเกตการณ์ตอนกลางคืน แต่ยังใช้สเกลสี
+   ของสถานะทางญาณวิทยาชุดเดียวกัน เพื่อให้อ่านเป็นผลผลิตของเครื่องเดียวกัน
+   ───────────────────────────────────────────────────────────── */
+:root{
+  color-scheme: light;
+  --paper:#FBFAF7;
+  --paper-2:#F3F1EA;
+  --ink:#16181F;
+  --muted:#6B6F7E;
+  --faint:#9A9EAC;
+  --rule:#E2DFD6;
+
+  /* สเกลสถานะเดียวกับเครื่องมือ ปรับให้อ่านออกบนกระดาษ */
+  --st-unknown:#7A809B;
+  --st-uncertain:#6E5FA0;
+  --st-partial:#B4641F;
+  --st-known:#8A6A11;
+  --st-contra:#BE3A2F;
+
+  --accent:#B4641F;
+  --f-display:"Chakra Petch","IBM Plex Sans Thai",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans Thai","Noto Sans Thai",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--f-body);font-size:15px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:720px;margin:0 auto;padding:52px 24px 96px}
+
+/* ── หัวเรื่อง ─────────────────────────────────────────────── */
+.eyebrow{font-family:var(--f-display);font-size:11px;font-weight:700;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--accent)}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(30px,5.2vw,42px);
+  line-height:1.18;letter-spacing:-.01em;margin:10px 0 14px;text-wrap:balance}
+.lede{font-size:17px;line-height:1.68;color:var(--ink);margin:0 0 22px}
+.lede b{font-weight:600}
+
+.method{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--rule);border-radius:3px;
+  overflow:hidden;background:#fff;margin-bottom:8px}
+.method div{flex:1 1 128px;padding:10px 13px;border-right:1px solid var(--rule)}
+.method div:last-child{border-right:0}
+.method span{display:block;font-family:var(--f-display);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint)}
+.method b{font-family:var(--f-mono);font-weight:500;font-size:19px;font-variant-numeric:tabular-nums}
+.caveat{font-size:13px;color:var(--muted);line-height:1.6;margin:12px 0 0}
+
+hr{border:0;border-top:1px solid var(--rule);margin:44px 0}
+
+h2{font-family:var(--f-display);font-weight:700;font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+h2 + .sub{color:var(--muted);font-size:14px;margin:0 0 24px;line-height:1.6}
+
+/* ── ลำดับกลไก ─────────────────────────────────────────────── */
+.chain{display:grid;gap:0;margin:0 0 8px}
+.step{display:grid;grid-template-columns:34px 1fr;gap:14px;padding:0 0 20px;position:relative}
+.step:last-child{padding-bottom:0}
+.step .n{font-family:var(--f-mono);font-size:12px;font-weight:500;color:#fff;
+  width:24px;height:24px;border-radius:50%;display:grid;place-items:center;
+  background:var(--st-partial);margin-top:2px;font-variant-numeric:tabular-nums}
+.step.fatal .n{background:var(--st-contra)}
+.step:not(:last-child)::before{content:"";position:absolute;left:11px;top:28px;bottom:2px;
+  width:1px;background:var(--rule)}
+.step .t{font-weight:600;line-height:1.5}
+.step .d{color:var(--muted);font-size:14px;line-height:1.6;margin-top:2px}
+
+/* ── ข้อค้นพบ ──────────────────────────────────────────────── */
+.find{padding:0 0 26px;margin:0 0 26px;border-bottom:1px solid var(--rule)}
+.find:last-child{border-bottom:0;padding-bottom:0;margin-bottom:0}
+.q{font-family:var(--f-display);font-size:13px;font-weight:500;color:var(--muted);
+  line-height:1.55;margin:0 0 8px;padding-left:15px;border-left:2px solid var(--accent)}
+.find h3{font-size:18px;line-height:1.45;font-weight:600;margin:0 0 8px;text-wrap:balance}
+.find p{margin:0 0 10px}
+.gap{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:start;
+  background:var(--paper-2);border-radius:3px;padding:10px 12px;font-size:14px;line-height:1.55}
+.gap b{font-family:var(--f-display);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--st-unknown);white-space:nowrap;padding-top:3px}
+
+/* ── ความขัดแย้ง ───────────────────────────────────────────── */
+.tension{border:1px solid var(--rule);border-left:3px solid var(--st-contra);border-radius:3px;
+  background:#fff;padding:15px 17px;margin:0 0 14px}
+.tension .pair{display:grid;gap:7px;margin-bottom:9px}
+.tension .side{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:baseline;font-size:15px}
+.tension .side i{font-style:normal;font-family:var(--f-mono);font-size:12px;color:var(--st-contra)}
+.tension .why{font-size:14px;color:var(--muted);line-height:1.6;
+  border-top:1px solid var(--rule);padding-top:9px}
+
+/* ── คำถามค้าง ─────────────────────────────────────────────── */
+ol.open{list-style:none;counter-reset:o;padding:0;margin:0;display:grid;gap:13px}
+ol.open li{counter-increment:o;display:grid;grid-template-columns:26px 1fr;gap:12px;align-items:start}
+ol.open li::before{content:counter(o,decimal-leading-zero);font-family:var(--f-mono);font-size:12px;
+  color:var(--faint);padding-top:4px;font-variant-numeric:tabular-nums}
+ol.open .t{font-weight:500;line-height:1.55}
+ol.open .n{font-size:13.5px;color:var(--muted);line-height:1.55;margin-top:1px}
+
+/* ── สถานะ ─────────────────────────────────────────────────── */
+.bar{display:flex;height:26px;border-radius:3px;overflow:hidden;margin:0 0 12px}
+.bar i{display:block}
+.key{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
+.key span{display:flex;align-items:center;gap:7px}
+.key em{width:9px;height:9px;border-radius:2px;font-style:normal;flex:none}
+.key b{font-family:var(--f-mono);font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
+
+footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--rule);
+  font-size:13.5px;color:var(--muted);line-height:1.68}
+footer b{color:var(--ink);font-weight:600}
+footer code{font-family:var(--f-mono);font-size:12.5px;background:var(--paper-2);
+  padding:1px 5px;border-radius:2px}
+
+@media (max-width:560px){
+  .wrap{padding:34px 18px 64px}
+  .method div{flex:1 1 50%}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<div class="eyebrow">ผลจากก้นหอยคำถาม</div>
+<h1>ทำไมร้านกาแฟตายในปีแรก</h1>
+<p class="lede">ไม่มีใครค้นเรื่องนี้ให้ — <b>ระบบเป็นคนตั้งคำถาม แล้ว Claude เป็นคนตอบ</b>
+คำถามแต่ละข้อถูกบังคับให้ทิ้ง “สิ่งที่คำตอบนี้อธิบายไม่ได้” ไว้เสมอ
+แล้วเศษนั้นกลายเป็นคำถามของรอบถัดไป หน้านี้คือสิ่งที่ตกตะกอนหลังห้ารอบ</p>
+
+<div class="method">
+  <div><span>รอบ</span><b>5</b></div>
+  <div><span>คำถาม</span><b>18</b></div>
+  <div><span>แนวคิดที่ได้</span><b>34</b></div>
+  <div><span>ความขัดแย้ง</span><b>5</b></div>
+</div>
+<p class="caveat">คำตอบทั้งหมดเป็นการให้เหตุผลเชิงกลไก ไม่ใช่ข้อมูลเชิงประจักษ์จากชุดข้อมูลจริง
+ทุกข้อในหน้านี้ควรถูกอ่านเป็น <em>สมมติฐานที่ตั้งได้ชัดพอจะไปทดสอบ</em> ไม่ใช่ข้อสรุป</p>
+
+<hr>
+
+<h2>กลไกที่ทำให้ตาย</h2>
+<p class="sub">คำถามแรกที่ระบบถามคือ “กลไกอะไรที่ทำให้มันเกิดขึ้น และกลไกนั้นต้องการเงื่อนไขอะไรบ้าง”
+คำตอบกลายเป็นลำดับเจ็ดขั้น ซึ่งเรียงตามเวลาจริง ไม่ใช่ตามความสำคัญ</p>
+
+<div class="chain">
+  <div class="step"><div class="n">1</div><div>
+    <div class="t">เซ็นสัญญาเช่า 3 ปี พร้อมค้ำประกันส่วนตัว</div>
+    <div class="d">ข้อผูกพันที่หนักที่สุดถูกเซ็นก่อนขายกาแฟแก้วแรก และก่อนรู้อะไรเลยเกี่ยวกับยอดขายจริง</div></div></div>
+  <div class="step"><div class="n">2</div><div>
+    <div class="t">ใช้ทุน 60–70% ไปกับการตกแต่งก่อนเปิด</div>
+    <div class="d">เงินก้อนใหญ่ที่สุดถูกใช้ในช่วงที่ยังไม่มีรายได้เลยสักบาท</div></div></div>
+  <div class="step"><div class="n">3</div><div>
+    <div class="t">เปิดร้านโดยเหลือเงินหมุน 2–3 เดือน</div>
+    <div class="d">นี่คือ “ระยะทางที่วิ่งได้” ทั้งหมด</div></div></div>
+  <div class="step"><div class="n">4</div><div>
+    <div class="t">ยอดขายไต่ถึงจุดคุ้มทุนที่เดือน 6–14</div>
+    <div class="d">นี่คือ “ระยะทางที่ต้องวิ่ง” — และมันยาวกว่าข้อ 3 เกือบเสมอ</div></div></div>
+  <div class="step fatal"><div class="n">5</div><div>
+    <div class="t">เงินหมดระหว่างทาง</div>
+    <div class="d">ร้านที่กำไรขั้นต้นต่อแก้ว 70% ก็ตายตรงนี้ได้ ปัญหาคือ<b>จังหวะเงินสด ไม่ใช่ความไม่ทำกำไร</b></div></div></div>
+  <div class="step fatal"><div class="n">6</div><div>
+    <div class="t">ออกไม่ได้ เพราะค้ำประกันทำให้เดินออกแพงกว่าอยู่ต่อ</div>
+    <div class="d">จุดที่ “ตัดสินใจผิด” หยุดเป็นคำอธิบาย เพราะไม่มีทางเลือกที่ถูกให้เลือกแล้ว</div></div></div>
+  <div class="step fatal"><div class="n">7</div><div>
+    <div class="t">เทรดต่อทั้งที่ขาดสภาพคล่อง จนซัพพลายเออร์หยุดส่งของ</div>
+    <div class="d">วันปิดร้านจริงถูกกำหนดโดยเครดิตเทอมของซัพพลายเออร์ ไม่ใช่โดยเจ้าของ</div></div></div>
+</div>
+
+<hr>
+
+<h2>สิ่งที่คำถามพาไปเจอ</h2>
+<p class="sub">ห้าข้อนี้ไม่ได้อยู่ในคำถามตั้งต้น มันโผล่มาเพราะถูกถามต่อจากช่องว่างของคำตอบก่อนหน้า</p>
+
+<div class="find">
+  <p class="q">ขอบเขตของ “ร้านกาแฟเจ๊งในปีแรก” สิ้นสุดตรงไหน และใครเป็นคนตัดสินว่าตรงนั้นคือขอบ?</p>
+  <h3>ตัวเลข “เจ๊ง 80% ในปีแรก” อาจกำลังนับคนที่ไม่ได้เจ๊ง</h3>
+  <p>สถิติส่วนใหญ่นับจากการไม่ต่อทะเบียน ซึ่งรวมคนที่ขายกิจการได้กำไร คนที่เปลี่ยนประเภทธุรกิจ
+  และคนที่ย้ายไปจดในนามใหม่ — สามกลุ่มนี้ไม่ได้เจ๊งเลย ขอบถูกลากโดยคนเก็บข้อมูล ไม่ใช่คนวิเคราะห์ธุรกิจ</p>
+  <div class="gap"><b>ยังตอบไม่ได้</b><span>ต่อให้นิยามสะอาด ก็ยังไม่รู้ว่าร้านที่รอดนั้น รอดเพราะเจ้าของเอาเงินจากทางอื่นมาอุ้มกี่ราย</span></div>
+</div>
+
+<div class="find">
+  <p class="q">เราจะรู้ได้อย่างไรว่าคำอธิบายนี้ผิด? ถ้าตอบไม่ได้ แปลว่าอะไร?</p>
+  <h3>คำอธิบายมาตรฐานพิสูจน์ว่าผิดไม่ได้ในรูปที่ใช้กันอยู่</h3>
+  <p>“ทำเลไม่ดี ทุนบาง ไม่มีประสบการณ์” ถูกหยิบมาใช้กับร้านที่เจ๊งแล้วเท่านั้น
+  วิธีทดสอบคือเอาไปจับร้านที่รอด — ถ้าร้านที่รอดมีสามอย่างนี้ในอัตราพอ ๆ กัน
+  แปลว่าคำอธิบายนั้นไม่ได้อธิบายอะไรเลย <b>สิ่งที่ล้มเหลวคือวิธีให้เหตุผล ไม่ใช่ตัวร้าน</b></p>
+  <div class="gap"><b>ยังตอบไม่ได้</b><span>การเทียบร้านที่รอดกับร้านที่เจ๊งยังขาดกลุ่มที่สาม คือคนที่ล้มเลิกตอนกำลังตกแต่ง ซึ่งไม่มีใครเก็บข้อมูล</span></div>
+</div>
+
+<div class="find">
+  <p class="q">เราสมมติอะไรไว้เงียบ ๆ ตอนที่พูดว่า “ร้านกาแฟเจ๊ง”?</p>
+  <h3>ร้านกาแฟคือสองธุรกิจซ้อนกัน และอย่างหนึ่งกินที่นั่งของอีกอย่าง</h3>
+  <p>กาแฟเช้าคนเดินทาง (มาร์จิ้นสูง นั่งสั้น) กับที่นั่งทำงานตอนบ่าย (มาร์จิ้นต่ำ นั่งยาว)
+  มีเศรษฐศาสตร์คนละชุด แต่ถูกวัดรวมเป็นยอดขายต่อวันตัวเดียว
+  ตัวเลขที่ควรดูคือ <b>รายได้ต่อที่นั่งต่อชั่วโมง แยกตามช่วงเวลา</b> ซึ่งไม่มี POS มาตรฐานตัวไหนออกให้
+  — เครื่องมือนั้นถูกมาก แค่เวลากับหมายเลขโต๊ะ การที่มันไม่มีจึงเป็นทางเลือก ไม่ใช่ข้อจำกัด</p>
+  <div class="gap"><b>ยังตอบไม่ได้</b><span>ช่วงเวลาที่ธุรกิจหนึ่งกินที่นั่งของอีกธุรกิจหนึ่ง</span></div>
+</div>
+
+<div class="find">
+  <p class="q">ต้องเปลี่ยนอะไรในนิยาม จึงจะกลืนเรื่อง “ทำไมค่าตกแต่งกินทุนสัดส่วนสูง” เข้าไปได้?</p>
+  <h3>วัตถุที่ควรวัดคือ “โครงการ” ตั้งแต่เซ็นเช่าถึงปิด ไม่ใช่ “ร้าน” ตั้งแต่วันเปิด</h3>
+  <p>การทำลายทุนเริ่มตั้งแต่วันเซ็นสัญญา ไม่ใช่วันเปิดร้าน ภายใต้นิยามใหม่ ค่าตกแต่งเลิกเป็นปริศนา:
+  มันคือราคาของการแปลงพื้นที่เปล่าให้ใช้ได้ ซึ่งผู้เช่ารายถัดไปก็ต้องรื้อทิ้งอยู่ดี
+  <b>เป็นการโอนมูลค่าให้เจ้าของที่ แต่ถูกลงบัญชีเหมือนเป็นสินทรัพย์ของธุรกิจ</b>
+  และช่วงเสี่ยงที่สุดกลายเป็นช่วงที่ยังไม่มีรายได้เลย</p>
+  <div class="gap"><b>ยังตอบไม่ได้</b><span>ต้นทุนช่วงก่อนเปิดที่ไม่ปรากฏในบัญชีของฝ่ายใดเลย — เจ้าของที่ นายทะเบียน นักบัญชี ต่างวัดคนละหน้าต่าง ไม่มีใครถือบัญชีที่ครอบทั้งช่วง</span></div>
+</div>
+
+<div class="find">
+  <p class="q">อะไรกำหนดความชันของการไต่ยอดขาย — ทำเล เมนู หรืออย่างอื่น?</p>
+  <h3>“ทำเลดี” ไม่ใช่ที่คนเยอะ แต่คือที่คนหน้าเดิมผ่านซ้ำเวลาเดิม</h3>
+  <p>ความชันไม่ใช่คุณสมบัติของร้าน แต่เป็นอัตราที่คนผ่านทางแปลงเป็นลูกค้าประจำ
+  ซึ่งเกิดหลังมาซ้ำราว 4–6 ครั้งในช่วงสั้น ๆ
+  นิยามนี้พลิกความหมายของทำเลทันที — <b>ถนนท่องเที่ยวมีคนเยอะมหาศาลแต่ความชันเกือบศูนย์</b>
+  เพราะแทบไม่มีใครกลับมาครั้งที่สอง</p>
+  <div class="gap"><b>ยังตอบไม่ได้</b><span>จำนวนครั้งที่ต้องมาซ้ำก่อนกลายเป็นลูกค้าประจำ — และมันต่างกันแค่ไหนระหว่างย่านออฟฟิศกับย่านที่อยู่อาศัย</span></div>
+</div>
+
+<hr>
+
+<h2>ความขัดแย้งที่ต้องตัดสิน</h2>
+<p class="sub">ระบบให้รางวัลกับการเปิดโปงความขัดแย้ง ไม่ใช่การกลบมัน ห้าคู่นี้อยู่ด้วยกันไม่ได้
+และการเลือกข้างเปลี่ยนคำแนะนำที่จะให้คนเปิดร้านไปคนละทาง</p>
+
+<div class="tension">
+  <div class="pair">
+    <div class="side"><i>ก</i><span>การปิดร้านหลายกรณีคือ<b>การถอนตัวอย่างมีเหตุผล</b> — เจ้าของพบว่าเป็นแรงงาน 14 ชั่วโมงเพื่อรายได้ต่ำกว่าไปเป็นลูกจ้าง แล้วออก</span></div>
+    <div class="side"><i>ข</i><span><b>การค้ำประกันส่วนตัวทำให้เดินออกแพงกว่าอยู่ต่อ</b> — เจ้าของไม่มีทางเลือกให้ถอนตัว</span></div>
+  </div>
+  <div class="why">ถ้า ก ถูก อัตราการเจ๊งกำลังวัดการตัดสินใจเรื่องอาชีพ ไม่ใช่ความอยู่รอดของธุรกิจ
+  และทุกนโยบายที่ตั้งใจ “ลดอัตราการเจ๊ง” ก็เล็งผิดเป้า ถ้า ข ถูก การถอนตัวไม่ใช่ทางเลือกตั้งแต่แรก
+  — เป็นไปได้ว่าทั้งคู่จริงคนละช่วงเวลา แต่ยังไม่มีใครแยกมันออกจากกัน</div>
+</div>
+
+<div class="tension">
+  <div class="pair">
+    <div class="side"><i>ก</i><span>หน่วยที่ควรวัดคือ <b>“ร้านกาแฟ” ตั้งแต่วันเปิด</b> — กรอบที่ทุกสถิติใช้อยู่</span></div>
+    <div class="side"><i>ข</i><span>หน่วยที่ควรวัดคือ <b>“โครงการ” ตั้งแต่วันเซ็นเช่า</b> — กรอบที่ทำให้ค่าตกแต่งอธิบายได้</span></div>
+  </div>
+  <div class="why">เลือก ก แล้วช่วงที่ทุนถูกทำลายมากที่สุดจะอยู่นอกกรอบการวัดทั้งหมด
+  เลือก ข แล้วสถิติที่มีอยู่ทุกตัวใช้ไม่ได้ เพราะไม่มีใครเก็บข้อมูลช่วงก่อนเปิด</div>
+</div>
+
+<div class="tension">
+  <div class="pair">
+    <div class="side"><i>ก</i><span>หน้าต่างอันตรายจริงคือ <b>เดือน 8–18</b> — ค่าเช่าปีสองกับเซอร์วิสใหญ่ครั้งแรกของเครื่องมาลงพร้อมกัน</span></div>
+    <div class="side"><i>ข</i><span>ทุกคนวัดกันที่ <b>12 เดือน</b></span></div>
+  </div>
+  <div class="why">ถ้า ก ถูก กรอบ 12 เดือนตัดครึ่งหน้าต่างอันตรายพอดี ร้านที่ปิดเดือน 13
+  ถูกนับเป็น “รอด” ทั้งที่ตายด้วยกลไกเดียวกันเป๊ะ</div>
+</div>
+
+<div class="tension">
+  <div class="pair">
+    <div class="side"><i>ก</i><span>ข้อจำกัดคือ <b>จำนวนเงินที่ใช้ตกแต่ง</b></span></div>
+    <div class="side"><i>ข</i><span>ข้อจำกัดคือ <b>ความไม่คืนตัวของมัน</b> — ตกแต่งถูกแต่ขนอะไรกลับออกมาไม่ได้ ก็ติดกับเท่ากัน</span></div>
+  </div>
+  <div class="why">คำถามที่ควรถามก่อนเซ็นเช็คจึงไม่ใช่ “ใช้ไปเท่าไร” แต่คือ
+  <b>“ตอนปิดร้าน ขนอะไรออกไปได้บ้าง”</b> ซึ่งเป็นคนละคำถามกันโดยสิ้นเชิง</div>
+</div>
+
+<div class="tension">
+  <div class="pair">
+    <div class="side"><i>ก</i><span><b>ร้านคือสองธุรกิจ</b>ที่มีเศรษฐศาสตร์คนละชุด</span></div>
+    <div class="side"><i>ข</i><span><b>POS รายงานยอดรวม</b> — เครื่องมือที่ใช้อยู่มองเห็นได้แค่ธุรกิจเดียว</span></div>
+  </div>
+  <div class="why">ตราบใดที่เครื่องมือวัดรวมสองอย่างเป็นตัวเลขเดียว สัญญาณของทั้งคู่จะกลบกันเอง
+  — เจ้าของจะเห็นแค่ “ยอดตก” โดยไม่มีทางรู้ว่าธุรกิจไหนตก</div>
+</div>
+
+<hr>
+
+<h2>คำถามที่ยังไม่มีคำตอบ</h2>
+<p class="sub">นี่คือสิ่งที่ระบบเรียกว่า <em>เศษ</em> — สิ่งที่คำตอบแต่ละข้ออธิบายไม่ได้
+เรียงตามความไม่แน่นอนของบริเวณที่มันค้างอยู่ ถ้าจะไปหาข้อมูลจริงต่อ เริ่มจากบนสุด</p>
+
+<ol class="open">
+  <li><div><div class="t">ร้านที่รอดนั้น รอดเพราะเจ้าของอุ้มด้วยเงินจากทางอื่นกี่ราย</div>
+    <div class="n">ถ้าสัดส่วนสูง “อัตรารอด” ก็กำลังวัดฐานะของเจ้าของ ไม่ใช่คุณภาพของร้าน</div></div></li>
+  <li><div><div class="t">คนที่ล้มเลิกตอนกำลังตกแต่ง มีกี่ราย</div>
+    <div class="n">กลุ่มที่หายไปจากทุกสถิติ และน่าจะเป็นกลุ่มที่เสียเงินหนักที่สุดต่อหัว</div></div></li>
+  <li><div><div class="t">ต้องมาซ้ำกี่ครั้งถึงกลายเป็นลูกค้าประจำ และต่างกันแค่ไหนตามย่าน</div>
+    <div class="n">ตัวเลขนี้แปลงตรง ๆ เป็น “ต้องมีเงินหมุนกี่เดือน”</div></div></li>
+  <li><div><div class="t">สัดส่วนทุนที่เคลื่อนย้ายได้ เทียบกับที่ติดอยู่กับพื้นที่</div>
+    <div class="n">ตัวเลขเดียวที่บอกว่าเดินออกจะเจ็บแค่ไหน แต่ไม่มีใครคำนวณตอนวางแผน</div></div></li>
+  <li><div><div class="t">ต้นทุนช่วงก่อนเปิดที่ไม่ปรากฏในบัญชีของฝ่ายใดเลย</div>
+    <div class="n">เจ้าของที่ นายทะเบียน และนักบัญชี ต่างวัดคนละหน้าต่าง ช่วงนี้จึงตกหล่นทั้งหมด</div></div></li>
+  <li><div><div class="t">ช่วงเวลาที่ธุรกิจหนึ่งกินที่นั่งของอีกธุรกิจหนึ่ง</div>
+    <div class="n">วัดได้ด้วยเวลากับหมายเลขโต๊ะ แต่ไม่มี POS ตัวไหนออกรายงานนี้</div></div></li>
+  <li><div><div class="t">สาเหตุเชิงโครงสร้างที่ผู้เกี่ยวข้องไม่ได้ประสบในรูปของ “การตัดสินใจ”</div>
+    <div class="n">การสัมภาษณ์หลังปิดร้านมองไม่เห็นมันโดยหลักการ เพราะคนเล่าได้เฉพาะสิ่งที่จำในรูปของทางเลือก</div></div></li>
+</ol>
+
+<hr>
+
+<h2>สถานะของสิ่งที่รู้</h2>
+<p class="sub">34 แนวคิดที่ระบบสร้างขึ้นระหว่างทาง แยกตามว่ารู้จริงแค่ไหน
+สังเกตว่าสัดส่วนที่ยัง “ไม่รู้” และ “ขัดแย้ง” รวมกันเกินครึ่ง — ซึ่งถูกต้องสำหรับเรื่องที่เพิ่งเริ่มขุด</p>
+
+<div class="bar">
+  <i style="background:var(--st-known);width:6%"></i>
+  <i style="background:var(--st-partial);width:35%"></i>
+  <i style="background:var(--st-uncertain);width:18%"></i>
+  <i style="background:var(--st-contra);width:12%"></i>
+  <i style="background:var(--st-unknown);width:29%"></i>
+</div>
+<div class="key">
+  <span><em style="background:var(--st-known)"></em>รู้แล้ว <b>2</b></span>
+  <span><em style="background:var(--st-partial)"></em>รู้บางส่วน <b>12</b></span>
+  <span><em style="background:var(--st-uncertain)"></em>ไม่แน่ใจ <b>6</b></span>
+  <span><em style="background:var(--st-contra)"></em>ขัดแย้ง <b>4</b></span>
+  <span><em style="background:var(--st-unknown)"></em>ยังไม่รู้ <b>10</b></span>
+</div>
+
+<footer>
+  <p><b>วิธีที่ได้มา</b> — ระบบชื่อ Spice ตั้งคำถามเอง ห้ามถามซ้ำ (ทั้งเชิงคำและเชิงแนวคิด)
+  และบังคับว่าทุกคำตอบต้องระบุสิ่งที่ตัวเองอธิบายไม่ได้ เศษนั้นกลายเป็นเป้าหมายของคำถามรอบถัดไป
+  ผมตอบทุกคำถามเองผ่าน <code>spice propose</code> / <code>spice absorb</code></p>
+  <p>ตัวเลข “ความประหลาดใจ” ของแต่ละรอบอยู่ที่ 0.32–0.68 — วัดจากว่าคำตอบขยับความเชื่อที่มีอยู่ก่อนไปเท่าไร
+  และเศษที่ได้มาใหม่จริงหรือเป็นเศษเดิมที่วนกลับมา</p>
+  <p><b>ข้อจำกัดที่ต้องพูดให้ชัด</b> — ไม่มีข้อมูลเชิงประจักษ์อยู่ในนี้เลยสักตัว
+  ทุกอย่างเป็นการให้เหตุผลเชิงกลไกที่ตรวจสอบได้ด้วยการไปเก็บข้อมูลจริง
+  ค่าของหน้านี้อยู่ที่ <em>มันบอกว่าควรไปวัดอะไร</em> ไม่ใช่ที่มันตอบแทนการวัด</p>
+</footer>
+
+</div>

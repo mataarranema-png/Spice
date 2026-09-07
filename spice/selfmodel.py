@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+from .question import _PROFILE_MATURE, _PROFILE_YOUNG
 from .types import QuestionLevel
 
 
@@ -121,16 +122,31 @@ class SelfModel:
 
         found: list[Limit] = []
 
-        # 1. ระดับคำถามที่ระบบไม่เคยแตะ
+        # 1. ระดับคำถามที่ระบบไม่เคยแตะ — เทียบกับ *สัดส่วนที่ควรเป็น*
+        #
+        # เดิมใช้เกณฑ์ตายตัว share < 3% ซึ่งทำให้ระบบฟ้องตัวเองว่า "ไม่เคยถาม
+        # ระดับอ้างถึงตัวเองเลย" ตั้งแต่รอบที่สอง แล้วสร้างเครื่องมือมากลบ
+        # ช่องนั้นจนคำถามทั้งรอบหมดไปกับการถามถึงตัวเอง — ซึ่งเป็นการผลาญ
+        # รอบของคนที่กำลังใช้มันคิดเรื่องจริงอยู่  ระดับสูงไม่ *ควร* มีสัดส่วน
+        # มากตอนกราฟยังเล็ก การไม่มีจึงไม่ใช่ช่องโหว่
         total_levels = sum(self.level_uses.values())
+        maturity = min(1.0, (self.node_history[-1] if self.node_history else 0) / 60.0)
+        target = [
+            e + (l - e) * maturity
+            for e, l in zip(_PROFILE_YOUNG, _PROFILE_MATURE)
+        ]
         for level in QuestionLevel:
-            share = self.level_uses.get(int(level), 0) / total_levels if total_levels else 0.0
-            if total_levels >= 6 and share < 0.03:
+            if total_levels < 18:
+                break
+            share = self.level_uses.get(int(level), 0) / total_levels
+            want = target[int(level)]
+            if share < want * 0.35:
                 found.append(
                     Limit(
                         "coverage",
-                        f"แทบไม่เคยตั้งคำถามระดับ{level.th}เลย ({share:.0%} ของคำถามทั้งหมด)",
-                        0.5 + 0.1 * int(level),
+                        f"ตั้งคำถามระดับ{level.th}น้อยกว่าที่ควร "
+                        f"({share:.0%} เทียบกับที่ควรเป็นราว {want:.0%})",
+                        0.45 + 0.08 * int(level),
                         epoch,
                     )
                 )
