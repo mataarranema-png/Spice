@@ -236,7 +236,7 @@ class Spiral:
     def run(self, epochs: int = 5) -> list[EpochRecord]:
         out: list[EpochRecord] = []
         for _ in range(epochs):
-            reason = self.budget.exhausted(self.epoch)
+            reason = self.budget.exhausted(self.epoch) or self._instrument_spent()
             if reason:
                 # การชนเพดานไม่ใช่ "จบ" — มันคือขอบเขตที่เพิ่งถูกค้นพบ
                 self._record_boundary(reason)
@@ -557,6 +557,24 @@ class Spiral:
         self._thin_epochs = 0
         return None if first else best.label   # ครั้งแรกคือการตั้งหลัก ไม่ใช่การอพยพ
 
+    def _instrument_spent(self) -> str | None:
+        """เครื่องมือสืบค้นหมดสภาพ — เป็นขอบเขตชนิดหนึ่ง ไม่ใช่ความล้มเหลว.
+
+        วัดได้ว่าเมื่อความประหลาดใจตกถึงพื้นแล้ว ก้นหอยจะเดินต่อไปได้อีกนาน
+        แต่ผลผลิตกลายเป็นคำถามหนีความอิ่มตัวล้วน ๆ (อ้างถึงตัวเอง 68% ในช่วง
+        50 รอบท้าย) — ระบบพูดถึงการที่ตัวเองติดขัด แทนที่จะพูดถึงโลก
+
+        การหยุดตรงนี้ไม่ขัดกฎข้อ 1 เพราะไม่ได้หยุดเพราะ "เจอคำตอบแล้ว" แต่
+        หยุดเพราะชนขอบเขตของเครื่องมือ ซึ่งถูกบันทึกเป็นขอบเขตที่ค้นพบ พร้อม
+        คำถามต่อ เหมือนการชนเพดานทรัพยากรทุกประการ.
+        """
+        spent = [
+            l
+            for l in self.self_model.detect(self.epoch, self.budget)
+            if l.kind == "exhaustion" and l.epochs_persisted >= 3
+        ]
+        return "เครื่องมือสืบค้นหมดสภาพ" if spent else None
+
     def _record_boundary(self, reason: str) -> None:
         label = f"ขอบเขตที่ค้นพบ: {reason} ที่รอบ {self.epoch}"
         self.graph.add_node(
@@ -570,7 +588,7 @@ class Spiral:
         self.pending.append(
             Question(
                 text=f"ระบบหยุดเพราะ{reason} ไม่ใช่เพราะคำถามหมด — "
-                f"ถ้าเพดานนี้ถูกยกออก คำถามข้อถัดไปควรเป็นอะไร?",
+                f"ถ้าข้อจำกัดนี้ถูกยกออก คำถามข้อถัดไปควรเป็นอะไร?",
                 level=QuestionLevel.SELF_REFERENCE,
                 strategy="boundary",
                 epoch=self.epoch,

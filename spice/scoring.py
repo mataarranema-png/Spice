@@ -64,7 +64,9 @@ def score_question(
         c = graph.stats()["contradictions"] and 0.5 or 0.2
 
     novelty = ledger.novelty(q)
-    rarity = ledger.level_rarity(q.level)
+    # วุฒิภาวะวัดจากขนาดกราฟ: ยังไม่มีของรูปธรรมให้ถามถึง ก็ยังไม่ควรไต่ขึ้นไป
+    maturity = min(1.0, len(graph) / 60.0)
+    rarity = ledger.level_rarity(q.level, maturity)
     n = novelty * (0.6 + 0.4 * rarity)
 
     # คำถามที่พับกลับมาหาตัวระบบได้ค่า C เพิ่ม: ความขัดแย้งที่อันตรายที่สุด

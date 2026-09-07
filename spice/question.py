@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 
 from .types import QuestionLevel, stable_id
 
+# สัดส่วนที่ *ควรเป็น* ของแต่ละระดับ ตามวุฒิภาวะของกราฟ
+# (วัตถุ, กลไก, ข้อสมมติ, อภิคำถาม, ภววิทยา, อ้างถึงตัวเอง)
+_PROFILE_YOUNG = (0.30, 0.27, 0.18, 0.12, 0.07, 0.06)
+_PROFILE_MATURE = (0.14, 0.17, 0.18, 0.18, 0.16, 0.17)
+
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[^\w฀-๿]+", re.UNICODE)
 NGRAM = 4
@@ -158,17 +163,25 @@ class QuestionLedger:
                     break
         return max(0.0, 1.0 - worst)
 
-    def level_rarity(self, level: QuestionLevel) -> float:
-        """โบนัสให้ระดับคำถามที่ระบบแทบไม่เคยใช้.
+    def level_rarity(self, level: QuestionLevel, maturity: float = 0.0) -> float:
+        """เทียบสัดส่วนที่ใช้จริง กับ *สัดส่วนที่ควรเป็น ณ วุฒิภาวะนี้*.
 
-        นี่คือแรงผลักให้ก้นหอยไต่ขึ้นไปหา META / ONTOLOGY / SELF_REFERENCE
-        แทนที่จะวนอยู่ที่ระดับ OBJECT ตลอดกาล.
+        เดิมเทียบกับการกระจายแบบเท่ากันทุกระดับ ผลคือที่รอบ 0 ซึ่งยังไม่มี
+        ระดับไหนถูกใช้เลย ทุกระดับได้โบนัสเต็มเท่ากัน ก้นหอยจึงเริ่มต้นที่
+        ระดับภววิทยาได้ทันที แล้วลากแนวคิดรูปธรรมอย่าง "ค่าแรงแฝงของเจ้าของ"
+        ไปถามว่า "ถ้าไม่มีใครมองอยู่ มันยังเป็นมันอยู่ไหม" ซึ่งไร้ประโยชน์
+
+        ก้นหอยต้อง *ไต่ขึ้น* ไม่ใช่เริ่มจากยอด: ตอนกราฟยังเล็ก น้ำหนักควรอยู่
+        ที่ระดับวัตถุกับกลไก แล้วค่อยแผ่ขึ้นไปเมื่อมีของรูปธรรมให้ถามถึงจริง.
         """
+        m = max(0.0, min(1.0, maturity))
+        target = [e + (l - e) * m for e, l in zip(_PROFILE_YOUNG, _PROFILE_MATURE)]
         total = sum(self.level_counts.values())
         if total == 0:
-            return 1.0
+            return target[int(level)] / max(target)
         share = self.level_counts.get(int(level), 0) / total
-        return max(0.0, 1.0 - share * len(QuestionLevel) / 2.0)
+        # ตรงเป้า = 0.5, ต่ำกว่าเป้ามาก -> 1.0, เกินเป้ามาก -> 0.0
+        return max(0.0, min(1.0, 0.5 + 3.0 * (target[int(level)] - share)))
 
     def record(self, q: Question) -> None:
         sig = q.signature
