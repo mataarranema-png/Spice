@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="th" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spice · ยืมการ์ดจอ Colab มารันโมเดล AI จากเว็บ</title>
+<meta name="description" content="ล็อกอินด้วย Google ยืมพลัง Tesla T4 จาก Colab เชื่อม Google Drive ด้วย rclone แล้วสั่งรันโมเดล AI ได้จากหน้าเว็บเดียว">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌶️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/spice.css">
+<style>
+  .lander { max-width: 1180px; margin: 0 auto; padding: 0 1.4rem 5rem; }
+
+  .topnav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1.3rem 0; gap: 1rem;
+  }
+  .topnav__links { display: flex; gap: 1.5rem; font-size: 0.9rem; }
+  .topnav__links a { color: var(--text-soft); font-weight: 550; }
+  .topnav__links a:hover { color: var(--text); opacity: 1; }
+
+  .hero { padding: 3.4rem 0 2.6rem; text-align: center; }
+  .hero__eyebrow {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.32rem 0.85rem; margin-bottom: 1.4rem;
+    font-size: 0.8rem; font-weight: 600; color: var(--brand);
+    background: var(--brand-soft); border: 1px solid rgba(255,138,61,0.24);
+    border-radius: 99px;
+  }
+  .hero h1 { margin-bottom: 1.1rem; }
+  .hero h1 .glow {
+    background: var(--grad-brand);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero__lede {
+    max-width: 640px; margin: 0 auto 2rem;
+    font-size: clamp(1rem, 2vw, 1.15rem); color: var(--text-soft); line-height: 1.8;
+  }
+  .hero__cta { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; }
+  .hero__note { margin-top: 1rem; font-size: 0.82rem; color: var(--text-dim); }
+
+  .marquee {
+    display: flex; gap: 0.55rem; justify-content: center; flex-wrap: wrap;
+    margin-top: 2.6rem;
+  }
+  .marquee .tag { font-size: 0.78rem; padding: 0.3rem 0.75rem; border: 1px solid var(--border); }
+
+  .section { padding: 3.4rem 0 0; }
+  .section__head { text-align: center; max-width: 620px; margin: 0 auto 2rem; }
+  .section__head p { margin-top: 0.5rem; }
+
+  .feature { padding: 1.5rem; }
+  .feature__icon {
+    width: 42px; height: 42px; display: grid; place-items: center;
+    font-size: 1.25rem; border-radius: 12px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    margin-bottom: 0.9rem;
+  }
+  .feature h3 { margin-bottom: 0.4rem; }
+  .feature p { font-size: 0.89rem; margin: 0; }
+
+  .steps { counter-reset: step; display: grid; gap: 1rem; }
+  .step { display: flex; gap: 1.1rem; align-items: flex-start; padding: 1.2rem 1.4rem; }
+  .step__num {
+    counter-increment: step; flex-shrink: 0;
+    width: 34px; height: 34px; display: grid; place-items: center;
+    font-weight: 700; font-size: 0.92rem; color: var(--brand);
+    background: var(--brand-soft); border: 1px solid rgba(255,138,61,0.25);
+    border-radius: 11px;
+  }
+  .step__num::before { content: counter(step); }
+  .step h3 { margin-bottom: 0.25rem; }
+  .step p { margin: 0; font-size: 0.89rem; }
+
+  .flow { width: 100%; height: auto; }
+  .flow text { font-family: var(--font); }
+
+  .footer {
+    margin-top: 4rem; padding-top: 1.6rem; border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    font-size: 0.82rem; color: var(--text-dim);
+  }
+
+  .alert {
+    display: flex; gap: 0.7rem; align-items: flex-start;
+    padding: 0.85rem 1.1rem; margin-bottom: 1.4rem;
+    border-radius: var(--radius-sm); font-size: 0.88rem;
+    background: var(--danger-soft); border: 1px solid rgba(255,92,122,0.3); color: var(--text);
+  }
+</style>
+</head>
+<body>
+
+<div class="lander">
+
+  <nav class="topnav">
+    <div class="row">
+      <div class="brand__mark">🌶️</div>
+      <div>
+        <div class="brand__name">Spice</div>
+        <div class="brand__sub">GPU orchestrator</div>
+      </div>
+    </div>
+    <div class="topnav__links">
+      <a href="#how">วิธีใช้</a>
+      <a href="#features">ความสามารถ</a>
+      <a href="#flow">สถาปัตยกรรม</a>
+    </div>
+    <button class="icon-btn" id="theme-btn" title="สลับธีมสว่าง/มืด">◐</button>
+  </nav>
+
+  <div id="alert-slot"></div>
+
+  <header class="hero">
+    <div class="hero__eyebrow"><span class="dot dot--pulse"></span> ยืมการ์ดจอ Tesla T4 ได้ฟรีจาก Google Colab</div>
+    <h1>สั่งรันโมเดล AI จากเว็บ<br><span class="glow">ด้วยการ์ดจอที่ยืมมา</span></h1>
+    <p class="hero__lede">
+      ล็อกอินด้วยบัญชี Google ครั้งเดียว → เปิด Colab วางคำสั่งบรรทัดเดียว →
+      การ์ดจอ T4 ของ Colab จะกลายเป็นเครื่องประมวลผลของคุณทันที
+      พร้อมเชื่อม Google Drive ด้วย rclone แบบไม่ต้องตั้งค่าอะไรเลย
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--google btn--lg" id="google-btn" href="/auth/google/login?drive=1">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        เข้าสู่ระบบด้วย Google
+      </a>
+      <a class="btn btn--lg btn--ghost" href="#how">ดูวิธีใช้ก่อน</a>
+    </div>
+    <p class="hero__note" id="login-note">ขอสิทธิ์ Google Drive ไปด้วย เพื่อให้ rclone เมานต์ไดรฟ์ให้อัตโนมัติ</p>
+
+    <div class="marquee">
+      <span class="tag">Tesla T4 · 16GB</span>
+      <span class="tag">rclone + Google Drive</span>
+      <span class="tag">Qwen 2.5 · Typhoon ไทย</span>
+      <span class="tag">SDXL Turbo</span>
+      <span class="tag">Whisper v3</span>
+      <span class="tag">Vector Vault</span>
+      <span class="tag">อัปเดตสดแบบเรียลไทม์</span>
+    </div>
+  </header>
+
+  <section class="section" id="how">
+    <div class="section__head">
+      <h2>เริ่มใช้ใน 3 ขั้นตอน</h2>
+      <p>ไม่ต้องเช่าเซิร์ฟเวอร์ ไม่ต้องตั้งค่า CUDA ไม่ต้องจำคำสั่ง rclone</p>
+    </div>
+    <div class="steps">
+      <div class="card step">
+        <div class="step__num"></div>
+        <div>
+          <h3>ล็อกอินด้วยบัญชี Google</h3>
+          <p>กดปุ่มเดียว ระบบจะขอสิทธิ์เข้าถึง Drive ของคุณเพื่อใช้สร้างไฟล์ตั้งค่า rclone ให้อัตโนมัติ — ไม่มีรหัสผ่านให้จำ</p>
+        </div>
+      </div>
+      <div class="card step">
+        <div class="step__num"></div>
+        <div>
+          <h3>เปิด Colab แล้ววางคำสั่งบรรทัดเดียว</h3>
+          <p>หน้าเว็บจะสร้างรหัสจับคู่และคำสั่งให้พร้อมก๊อป วางใน Colab ที่ตั้งค่า T4 GPU ไว้ กดรัน แล้วเครื่องจะขึ้นสถานะ “ออนไลน์” ในหน้าเว็บเองภายใน 10 วินาที</p>
+        </div>
+      </div>
+      <div class="card step">
+        <div class="step__num"></div>
+        <div>
+          <h3>เลือกโมเดล พิมพ์คำสั่ง กดรัน</h3>
+          <p>งานจะถูกส่งเข้าคิว เครื่องที่ยืมมาจะรับไปรันบน GPU แล้วส่งผลกลับหน้าเว็บแบบสด ๆ พร้อมบันทึกลง Google Drive ให้ถ้าต้องการ</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="section__head">
+      <h2>ทุกอย่างที่ต้องใช้ อยู่ในที่เดียว</h2>
+      <p>ออกแบบให้ “เปิดมาก็ใช้ได้เลย” โดยไม่ต้องแตะเทอร์มินัลอีก</p>
+    </div>
+    <div class="grid grid--3">
+      <div class="card card--hover feature">
+        <div class="feature__icon">🔐</div>
+        <h3>ล็อกอิน Google</h3>
+        <p>OAuth 2.0 เต็มรูปแบบ เซสชันเก็บในคุกกี้แบบ httponly โทเคนทั้งหมดเข้ารหัสก่อนบันทึกลงฐานข้อมูล และจำกัดผู้ใช้ตามอีเมลหรือโดเมนได้</p>
+      </div>
+      <div class="card card--hover feature">
+        <div class="feature__icon">⚡</div>
+        <h3>ยืมการ์ดจอ</h3>
+        <p>จับคู่ Colab ด้วยรหัสใช้ครั้งเดียว เห็น VRAM / การใช้งาน GPU แบบสด ๆ เพิ่มได้หลายเครื่อง ระบบจะกระจายงานให้เอง</p>
+      </div>
+      <div class="card card--hover feature">
+        <div class="feature__icon">🗄️</div>
+        <h3>rclone อัตโนมัติ</h3>
+        <p>สร้าง rclone.conf จากสิทธิ์ที่คุณอนุญาตไว้แล้ว เครื่อง Colab ดึงไปเมานต์ Drive ได้เอง อ่านไฟล์ 5TB เหมือนโฟลเดอร์ในเครื่อง</p>
+      </div>
+      <div class="card card--hover feature">
+        <div class="feature__icon">🧠</div>
+        <h3>คลังความรู้ Vault</h3>
+        <p>ค้นเอกสารด้วยความหมาย ไม่ใช่แค่คำตรง รองรับภาษาไทยที่ไม่เว้นวรรค และใช้งานได้ทันทีแม้ยังไม่มี GPU ว่าง</p>
+      </div>
+      <div class="card card--hover feature">
+        <div class="feature__icon">📡</div>
+        <h3>เห็นทุกอย่างแบบสด</h3>
+        <p>ความคืบหน้าของงาน บันทึกการทำงาน และสถานะ GPU ส่งตรงเข้าหน้าเว็บผ่าน SSE ไม่ต้องกดรีเฟรช</p>
+      </div>
+      <div class="card card--hover feature">
+        <div class="feature__icon">🎛️</div>
+        <h3>หลายชนิดงาน</h3>
+        <p>คุยกับโมเดลภาษา สร้างภาพ ถอดเสียงจากไฟล์ใน Drive หรือทำเวกเตอร์ — เลือกจากแค็ตตาล็อกที่บอกด้วยว่าเครื่องคุณรันไหวไหม</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="flow">
+    <div class="section__head">
+      <h2>ระบบทำงานอย่างไร</h2>
+      <p>เบราว์เซอร์สั่ง เซิร์ฟเวอร์จัดคิว Colab ลงมือรัน แล้วผลวิ่งกลับมาแบบสด</p>
+    </div>
+    <div class="card">
+      <svg class="flow" viewBox="0 0 900 320" role="img" aria-label="แผนภาพการทำงานของ Spice">
+        <defs>
+          <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ff9f45"/><stop offset="100%" stop-color="#ff5c7a"/>
+          </linearGradient>
+          <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#3ddc97"/><stop offset="100%" stop-color="#35c7d8"/>
+          </linearGradient>
+          <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- เบราว์เซอร์ -->
+        <g>
+          <rect x="18" y="108" width="180" height="104" rx="16" fill="url(#g1)" opacity="0.14" stroke="url(#g1)" stroke-width="1.5"/>
+          <text x="108" y="146" text-anchor="middle" font-size="26">🖥️</text>
+          <text x="108" y="174" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">หน้าเว็บ Spice</text>
+          <text x="108" y="194" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.6">ล็อกอิน Google · สั่งงาน</text>
+        </g>
+
+        <!-- เซิร์ฟเวอร์ -->
+        <g>
+          <rect x="290" y="78" width="200" height="164" rx="16" fill="currentColor" opacity="0.05" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.5"/>
+          <text x="390" y="116" text-anchor="middle" font-size="24">⚙️</text>
+          <text x="390" y="142" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">เซิร์ฟเวอร์ Spice</text>
+          <text x="390" y="166" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">คิวงานตามลำดับสำคัญ</text>
+          <text x="390" y="186" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">โทเคนเข้ารหัส + Vault</text>
+          <text x="390" y="206" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">สร้าง rclone.conf</text>
+          <text x="390" y="228" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.45">SQLite · ไฟล์เดียว</text>
+        </g>
+
+        <!-- Colab -->
+        <g>
+          <rect x="582" y="30" width="200" height="120" rx="16" fill="url(#g2)" opacity="0.13" stroke="url(#g2)" stroke-width="1.5"/>
+          <text x="682" y="68" text-anchor="middle" font-size="24">⚡</text>
+          <text x="682" y="94" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">Google Colab · T4</text>
+          <text x="682" y="114" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">worker ดึงงานไปรัน</text>
+          <text x="682" y="132" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">16GB VRAM</text>
+        </g>
+
+        <!-- Drive -->
+        <g>
+          <rect x="582" y="182" width="200" height="110" rx="16" fill="currentColor" opacity="0.05" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.5"/>
+          <text x="682" y="220" text-anchor="middle" font-size="24">🗄️</text>
+          <text x="682" y="246" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">Google Drive</text>
+          <text x="682" y="266" text-anchor="middle" fill="currentColor" font-size="11.5" opacity="0.62">เมานต์ด้วย rclone</text>
+        </g>
+
+        <g stroke="currentColor" stroke-opacity="0.4" stroke-width="1.6" fill="none" color="currentColor">
+          <path d="M200 148 L286 148" marker-end="url(#arw)"/>
+          <path d="M492 128 L578 96"  marker-end="url(#arw)"/>
+          <path d="M578 196 L494 182" marker-end="url(#arw)" stroke-dasharray="5 4"/>
+          <path d="M682 152 L682 178" marker-end="url(#arw)" stroke-dasharray="5 4"/>
+        </g>
+
+        <text x="243" y="138" text-anchor="middle" fill="currentColor" font-size="10.5" opacity="0.55">ส่งงาน</text>
+        <text x="536" y="104" text-anchor="middle" fill="currentColor" font-size="10.5" opacity="0.55">จ่ายงาน</text>
+        <text x="536" y="204" text-anchor="middle" fill="currentColor" font-size="10.5" opacity="0.55">ผลลัพธ์สด</text>
+        <text x="736" y="170" text-anchor="middle" fill="currentColor" font-size="10.5" opacity="0.55">อ่าน/เขียนไฟล์</text>
+      </svg>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div>🌶️ Spice — โฮสต์เองได้ทั้งหมด ข้อมูลอยู่กับคุณ</div>
+    <div class="row" style="gap:1.2rem">
+      <a href="/healthz">สถานะระบบ</a>
+      <a href="/docs">เอกสาร API</a>
+    </div>
+  </footer>
+</div>
+
+<script>
+  // ธีม: จำค่าที่ผู้ใช้เลือกไว้
+  const saved = (() => { try { return localStorage.getItem("spice-theme"); } catch { return null; } })();
+  if (saved) document.documentElement.dataset.theme = saved;
+  document.getElementById("theme-btn").onclick = () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("spice-theme", next); } catch {}
+  };
+
+  // แสดงข้อความเมื่อถูกเด้งกลับมาพร้อม error
+  const ERRORS = {
+    not_allowed: "อีเมลนี้ไม่อยู่ในรายชื่อที่อนุญาต — ติดต่อเจ้าของระบบเพื่อเพิ่มสิทธิ์",
+    bad_state: "คำขอล็อกอินหมดอายุหรือไม่ถูกต้อง กรุณาลองกดเข้าสู่ระบบใหม่",
+    missing_code: "ไม่ได้รับรหัสยืนยันจาก Google กรุณาลองใหม่",
+    access_denied: "คุณปฏิเสธการให้สิทธิ์ จึงยังเข้าใช้งานไม่ได้",
+  };
+  const err = new URLSearchParams(location.search).get("error");
+  if (err) {
+    document.getElementById("alert-slot").innerHTML =
+      `<div class="alert"><span>⚠️</span><span>${ERRORS[err] || "เข้าสู่ระบบไม่สำเร็จ: " + err}</span></div>`;
+  }
+
+  // ถ้ายังไม่ได้ตั้งค่า Google ให้บอกตรง ๆ ว่าต้องทำอะไร
+  fetch("/auth/config").then(r => r.json()).then(cfg => {
+    const btn = document.getElementById("google-btn");
+    const note = document.getElementById("login-note");
+    if (!cfg.google_enabled) {
+      btn.classList.add("btn--ghost");
+      btn.removeAttribute("href");
+      btn.style.cursor = "not-allowed";
+      btn.onclick = (e) => e.preventDefault();
+      note.innerHTML = "⚠️ ผู้ดูแลยังไม่ได้ตั้งค่า <code>GOOGLE_CLIENT_ID</code> และ <code>GOOGLE_CLIENT_SECRET</code> — ดูขั้นตอนได้ใน README";
+    } else if (cfg.restricted) {
+      note.textContent = "ระบบนี้เปิดให้เฉพาะอีเมลที่อยู่ในรายชื่อที่อนุญาตเท่านั้น";
+    }
+    if (cfg.dev_login) {
+      const demo = document.createElement("button");
+      demo.className = "btn btn--lg btn--ghost";
+      demo.textContent = "เข้าใช้แบบเดโม (ไม่ต้องใช้ Google)";
+      demo.onclick = async () => {
+        await fetch("/auth/dev", { method: "POST" });
+        location.href = "/app";
+      };
+      document.querySelector(".hero__cta").appendChild(demo);
+    }
+  }).catch(() => {});
+</script>
+</body>
+</html>

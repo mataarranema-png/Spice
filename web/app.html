@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="th" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spice · แผงควบคุม</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌶️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/spice.css">
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand__mark">🌶️</div>
+      <div>
+        <div class="brand__name">Spice</div>
+        <div class="brand__sub">GPU orchestrator</div>
+      </div>
+    </div>
+
+    <div class="nav-label">ทำงาน</div>
+    <div class="nav-item" data-route="overview"><span class="nav-item__icon">◈</span> ภาพรวม</div>
+    <div class="nav-item" data-route="studio"><span class="nav-item__icon">✦</span> สั่งงาน AI</div>
+    <div class="nav-item" data-route="jobs"><span class="nav-item__icon">☰</span> งานทั้งหมด
+      <span class="nav-item__badge hidden" id="badge-jobs">0</span>
+    </div>
+
+    <div class="nav-label">ทรัพยากร</div>
+    <div class="nav-item" data-route="gpu"><span class="nav-item__icon">⚡</span> เครื่อง GPU
+      <span class="nav-item__badge hidden" id="badge-gpu">0</span>
+    </div>
+    <div class="nav-item" data-route="drive"><span class="nav-item__icon">🗄️</span> Drive &amp; rclone</div>
+    <div class="nav-item" data-route="vault"><span class="nav-item__icon">🧠</span> คลังความรู้</div>
+
+    <div class="sidebar__foot">
+      <div class="nav-item" data-route="settings"><span class="nav-item__icon">⚙</span> ตั้งค่า</div>
+      <div class="userbox" id="userbox">
+        <div class="avatar" id="user-avatar">·</div>
+        <div class="grow" style="min-width:0">
+          <div class="userbox__name" id="user-name">กำลังโหลด…</div>
+          <div class="tiny dim" id="user-role">—</div>
+        </div>
+        <button class="icon-btn" id="logout-btn" title="ออกจากระบบ" style="width:28px;height:28px;font-size:0.8rem">⏻</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn sidebar__toggle" id="menu-btn" aria-label="เมนู">☰</button>
+      <div class="grow">
+        <div class="topbar__title" id="page-title">ภาพรวม</div>
+        <div class="topbar__crumb" id="page-crumb">—</div>
+      </div>
+      <span class="pill pill--offline" id="live-pill"><span class="dot"></span> กำลังเชื่อมต่อ</span>
+      <button class="icon-btn" id="theme-btn" title="สลับธีม">◐</button>
+      <button class="btn btn--primary btn--sm" id="quick-run">✦ สั่งงานใหม่</button>
+    </header>
+
+    <main id="view" class="view"></main>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div id="modal-slot"></div>
+
+<script src="/static/js/core.js"></script>
+<script src="/static/js/views.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

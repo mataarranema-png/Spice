@@ -1,7 +1,13 @@
-"""Vector Vault — คลังความรู้ค้นหาเชิงความหมาย เก็บใน SQLite ค้นด้วย cosine.
+"""Vector Vault — คลังความรู้ของ Spice เก็บใน SQLite ค้นด้วย cosine.
 
-ถ้ายังไม่มี GPU ว่างทำ embedding ระบบจะใช้ตัวสำรองในเครื่อง (hashing ของ
-ตัวอักษร n-gram) ซึ่งทำงานได้ทันทีและเหมาะกับภาษาไทยที่ไม่มีการเว้นวรรค.
+โหมดการค้นมีสองระดับ:
+
+1. **ค้นเชิงความหมายเต็มรูปแบบ** — เมื่อส่ง embedding จากโมเดลจริง (เช่น BGE-M3
+   ที่รันบนเครื่อง GPU) เข้ามาพร้อมเอกสารและคำค้น จะเข้าใจคำที่ความหมาย
+   ใกล้กันแม้สะกดไม่เหมือนกันเลย
+2. **ค้นแบบใกล้เคียงตัวอักษร (ตัวสำรองในเครื่อง)** — ใช้ hashing ของ
+   character n-gram ทำงานได้ทันทีโดยไม่ต้องมี GPU และเหมาะกับภาษาไทยที่ไม่
+   เว้นวรรค แต่จับได้เฉพาะความคล้ายของตัวอักษร ไม่ใช่ความหมาย
 """
 
 from __future__ import annotations
@@ -79,6 +85,10 @@ def add_document(
     return {"id": doc_id, "dim": len(vector), "source": "model" if embedding else "local"}
 
 
+SUBSTRING_BOOST = 0.35
+MIN_SCORE = 0.02
+
+
 def search(
     user_id: int,
     query: str,
@@ -86,10 +96,13 @@ def search(
     top_k: int = 5,
     query_embedding: list[float] | None = None,
 ) -> list[dict]:
-    if query_embedding:
-        needle = normalize(np.asarray(query_embedding, dtype=np.float32))
-    else:
-        needle = local_embed(query)
+    semantic = bool(query_embedding)
+    needle = (
+        normalize(np.asarray(query_embedding, dtype=np.float32))
+        if semantic
+        else local_embed(query)
+    )
+    needle_text = query.lower().strip()
 
     sql = "SELECT * FROM vault_docs WHERE user_id = ?"
     params: tuple = (user_id,)
@@ -102,6 +115,11 @@ def search(
         if row["dim"] != len(needle):
             continue  # ข้ามเอกสารที่ทำ embedding ด้วยโมเดลคนละมิติ
         score = float(np.dot(from_blob(row["embedding"], row["dim"]), needle))
+        # โหมดตัวสำรอง: ถ้าคำค้นปรากฏตรง ๆ ในเอกสาร ให้ถือว่าตรงมาก
+        if not semantic and needle_text and needle_text in row["text"].lower():
+            score = min(1.0, score + SUBSTRING_BOOST)
+        if score < MIN_SCORE:
+            continue          # ตัดเอกสารที่ไม่เกี่ยวทิ้ง ดีกว่าโชว์คะแนนติดลบ
         scored.append(
             {
                 "id": row["id"],

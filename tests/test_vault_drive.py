@@ -144,3 +144,28 @@ def test_oauth_state_signature_and_expiry():
     assert verify_state(state) == "1|/app"
     assert verify_state(state + "x") is None
     assert verify_state(state, max_age=-1) is None
+
+
+def test_irrelevant_documents_are_filtered_out(user_client):
+    user_client.post("/api/v1/vault/docs", json={"text": "สูตรแกงเขียวหวานไก่ใส่มะเขือพวง"})
+    hits = user_client.post(
+        "/api/v1/vault/search", json={"query": "kubernetes ingress controller"}
+    ).json()["hits"]
+    assert hits == []                 # ไม่เกี่ยวกันเลย ต้องไม่โผล่มา
+
+
+def test_scores_are_never_negative(user_client):
+    for text in ["เอกสารเรื่อง rclone", "เอกสารเรื่องการประชุม", "เอกสารเรื่องการ์ดจอ"]:
+        user_client.post("/api/v1/vault/docs", json={"text": text})
+    hits = user_client.post("/api/v1/vault/search", json={"query": "rclone", "top_k": 10}).json()["hits"]
+    assert hits and all(hit["score"] > 0 for hit in hits)
+
+
+def test_exact_phrase_ranks_first(user_client):
+    user_client.post("/api/v1/vault/docs", json={"text": "รหัสผ่าน WiFi ออฟฟิศคือ spice-2026-office"})
+    user_client.post("/api/v1/vault/docs", json={"text": "รายการอุปกรณ์ในออฟฟิศ: โต๊ะ เก้าอี้ จอมอนิเตอร์"})
+    hits = user_client.post(
+        "/api/v1/vault/search", json={"query": "spice-2026-office"}
+    ).json()["hits"]
+    assert "spice-2026-office" in hits[0]["text"]
+    assert hits[0]["score"] >= 0.35   # ได้โบนัสจากการพบข้อความตรงตัว
