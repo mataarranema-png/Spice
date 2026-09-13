@@ -45,11 +45,14 @@ Spice.render = async function () {
 /* งานที่ต้องทำหลังวาดหน้าเสร็จ */
 Spice.afterRender = function (route) {
   if (route === "studio") {
-    Spice.pickModel(Spice.state.selectedModel);
+    Spice.pickModel(Spice.state.selectedModel || "auto");
     if (Spice.state.pendingDriveInput) {
       document.getElementById("f-in").value = Spice.state.pendingDriveInput;
-      document.querySelector("#view details")?.setAttribute("open", "");
       Spice.state.pendingDriveInput = null;
+    }
+    if (Spice.state.pendingPrompt) {
+      document.getElementById("f-prompt").value = Spice.state.pendingPrompt;
+      Spice.state.pendingPrompt = null;
     }
     if (Spice.state.watchJob) Spice.renderLiveJob(Spice.state.watchJob);
   }
@@ -103,6 +106,15 @@ Spice.connectStream = function () {
 
   source.addEventListener("job", (event) => {
     const data = JSON.parse(event.data);
+
+    if (data.action === "chained") {
+      Spice.toast(`ขั้นที่ ${data.step}/${data.total} เริ่มแล้ว: ${data.title}`, "info");
+      // ลูกโซ่เดินต่อ — ให้หน้าจอตามไปดูงานขั้นถัดไปแทน
+      if (Spice.state.watchJob === data.parent_id) Spice.state.watchJob = data.job_id;
+    }
+    if (data.action === "recovered") {
+      Spice.toast(data.message, "warn", 7000);
+    }
     if (data.action === "finished") {
       Spice.toast(
         data.status === "done" ? `งานเสร็จแล้ว (${Spice.duration(data.duration)})` : "งานล้มเหลว — เปิดดูบันทึกได้",

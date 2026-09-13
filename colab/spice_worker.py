@@ -41,6 +41,19 @@ RCLONE_MOUNT = "/content/gdrive"
 
 _stop = threading.Event()
 _model_cache: dict[str, object] = {}
+# โมเดลที่โหลดค้างอยู่ใน VRAM ตอนนี้ — รายงานให้เซิร์ฟเวอร์รู้ เพื่อให้มันส่ง
+# งานที่ใช้โมเดลเดียวกันมาให้เครื่องนี้ก่อน (ไม่ต้องเสียเวลาโหลดใหม่)
+_warm_models: list[str] = []
+MAX_WARM = 6
+
+
+def mark_warm(model_id: str) -> None:
+    if not model_id:
+        return
+    if model_id in _warm_models:
+        _warm_models.remove(model_id)
+    _warm_models.append(model_id)
+    del _warm_models[:-MAX_WARM]
 
 
 # ── ยูทิลิตี้ ─────────────────────────────────────────────────
@@ -152,6 +165,7 @@ class SpiceClient:
             {
                 "status": status,
                 "drive_mounted": drive_mounted,
+                "warm_models": list(_warm_models),
                 **{k: info[k] for k in ("gpu_used_mb", "gpu_util", "gpu_name", "gpu_vram_mb")},
             },
             timeout=20,
@@ -468,13 +482,28 @@ def handle_job(client: SpiceClient, job: dict, state: dict) -> None:
         if runner is None:
             raise RuntimeError(f"เครื่องนี้ยังรันงานชนิด '{kind}' ไม่ได้")
         result, meta = runner(job, client)
+        mark_warm(job.get("model", ""))          # โมเดลนี้อยู่ใน VRAM แล้ว
         meta["total_seconds"] = round(time.time() - started, 2)
+        meta["warm_models"] = list(_warm_models)
         client.complete(job["id"], result=result, meta=meta)
         log(f"เสร็จ {job['id']} ใน {meta['total_seconds']} วินาที", "✅")
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         log(f"งานล้มเหลว: {detail}", "❌")
         traceback.print_exc()
+        if "out of memory" in detail.lower():
+            # คืน VRAM ให้หมดก่อน ไม่งั้นงานที่เซิร์ฟเวอร์ส่งมาใหม่ก็จะพังซ้ำ
+            log("ล้างโมเดลออกจาก VRAM เพื่อเปิดทางให้งานถัดไป", "🧹")
+            _model_cache.clear()
+            _warm_models.clear()
+            try:
+                import gc
+                import torch
+
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
         try:
             client.complete(job["id"], error=detail[:4000])
         except Exception as inner:

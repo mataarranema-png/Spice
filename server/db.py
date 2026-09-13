@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS workers (
     driver        TEXT NOT NULL DEFAULT '',
     runtime       TEXT NOT NULL DEFAULT '',
     capabilities  TEXT NOT NULL DEFAULT '[]',
+    warm_models   TEXT NOT NULL DEFAULT '[]',   -- โมเดลที่ค้างอยู่ใน VRAM พร้อมรันทันที
     drive_mounted INTEGER NOT NULL DEFAULT 0,
     jobs_done     INTEGER NOT NULL DEFAULT 0,
     created_at    REAL NOT NULL,
@@ -82,6 +83,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     result      TEXT NOT NULL DEFAULT '',
     error       TEXT NOT NULL DEFAULT '',
     priority    INTEGER NOT NULL DEFAULT 5,
+    parent_id   TEXT,                          -- งานนี้เกิดจากผลลัพธ์ของงานไหน
+    chain       TEXT NOT NULL DEFAULT '[]',    -- ขั้นตอนที่เหลือของลูกโซ่
+    plan        TEXT NOT NULL DEFAULT '{}',    -- แผนและเหตุผลที่สมองเลือกไว้
+    attempt     INTEGER NOT NULL DEFAULT 1,    -- ครั้งที่เท่าไหร่ (ใช้กับการลองใหม่อัตโนมัติ)
+    eta_seconds REAL NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
     started_at  REAL,
     progress_at REAL,          -- สัญญาณล่าสุดจาก worker ใช้ตัดสินว่างานค้างจริงไหม
@@ -153,10 +159,38 @@ def tx() -> Iterator[sqlite3.Connection]:
         raise
 
 
+# คอลัมน์ที่เพิ่มมาทีหลัง — เติมให้ฐานข้อมูลเดิมที่สร้างไว้ก่อนหน้าโดยไม่ต้องลบทิ้ง
+MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("workers", "warm_models", "TEXT NOT NULL DEFAULT '[]'"),
+    ("jobs", "parent_id", "TEXT"),
+    ("jobs", "chain", "TEXT NOT NULL DEFAULT '[]'"),
+    ("jobs", "plan", "TEXT NOT NULL DEFAULT '{}'"),
+    ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
+    ("jobs", "eta_seconds", "REAL NOT NULL DEFAULT 0"),
+    ("jobs", "progress_at", "REAL"),
+)
+
+
+def migrate() -> list[str]:
+    """เติมคอลัมน์ที่ขาดให้ฐานข้อมูลเดิม คืนรายชื่อที่เพิ่งเพิ่มไป."""
+    conn = get_conn()
+    added = []
+    for table, column, definition in MIGRATIONS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue          # ยังไม่มีตารางนี้ — SCHEMA จะสร้างให้เองอยู่แล้ว
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            added.append(f"{table}.{column}")
+    conn.commit()
+    return added
+
+
 def init_db() -> None:
     conn = get_conn()
     conn.executescript(SCHEMA)
     conn.commit()
+    migrate()
 
 
 def reset_connection() -> None:

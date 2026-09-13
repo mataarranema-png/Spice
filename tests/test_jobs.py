@@ -68,12 +68,12 @@ def test_job_failure_is_recorded(user_client, worker):
     user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"])
     user_client.post(
         f"/api/v1/worker/jobs/{job_id}/complete",
-        json={"error": "CUDA out of memory"},
+        json={"error": "ModuleNotFoundError: no module named torch"},
         headers=worker["headers"],
     )
     job = user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]
     assert job["status"] == "failed"
-    assert "CUDA" in job["error"]
+    assert "torch" in job["error"]
 
 
 def test_queue_respects_priority(user_client, worker):

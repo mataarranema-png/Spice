@@ -11,12 +11,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, catalog, db, events
+from .. import auth, brain, catalog, db, events, pipeline, scheduler, vault
 from .workers import ONLINE_WINDOW, worker_public
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
 
 MAX_PROMPT = 32_000
+
+
+class PlanRequest(BaseModel):
+    """คำสั่งภาษาคนหนึ่งก้อน ให้ระบบคิดแผนให้เอง."""
+
+    prompt: str = Field(default="", max_length=MAX_PROMPT)
+    drive_input: str = Field(default="", max_length=500)
+    drive_output: str = Field(default="", max_length=500)
+    priority: int = Field(default=5, ge=1, le=9)
+    use_vault: bool | None = None      # None = ให้ระบบตัดสินเอง
 
 
 class JobRequest(BaseModel):
@@ -46,13 +56,34 @@ def job_public(row, include_result: bool = True) -> dict:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "error": row["error"],
+        "attempt": row["attempt"],
+        "parent_id": row["parent_id"],
+        "eta_seconds": row["eta_seconds"],
+        "chain_left": len(db.loads(row["chain"], [])),
     }
     if row["finished_at"] and row["started_at"]:
         data["duration"] = round(row["finished_at"] - row["started_at"], 2)
     if include_result:
         data["result"] = row["result"]
         data["payload"] = db.loads(row["payload"], {})
+        data["plan"] = db.loads(row["plan"], {})
     return data
+
+
+def _capacity_and_history(user_id: int) -> tuple[dict, dict]:
+    return scheduler.capacity_for(user_id), scheduler.history_for(user_id)
+
+
+def _vault_context(user_id: int, query: str, limit: int = 3) -> tuple[str, list[dict]]:
+    """ดึงเอกสารที่เกี่ยวข้องจากคลังความรู้มาเป็นบริบท (RAG)."""
+    hits = vault.search(user_id, query, top_k=limit)
+    if not hits:
+        return "", []
+    blocks = [
+        f"[{index}] {hit['title']}\n{hit['text'][:1500]}"
+        for index, hit in enumerate(hits, 1)
+    ]
+    return "\n\n".join(blocks), hits
 
 
 @router.get("/models")
@@ -69,54 +100,133 @@ def list_models(user: dict = Depends(auth.require_user)) -> dict:
     return {"models": models, "kinds": catalog.KINDS, "best_vram_mb": best_vram}
 
 
+@router.post("/plan")
+def make_plan(body: PlanRequest, user: dict = Depends(auth.require_user)) -> dict:
+    """คิดแผนให้ดูก่อน ยังไม่รัน — หน้าเว็บใช้แสดงว่า "ระบบจะทำอะไร เพราะอะไร"."""
+    if not body.prompt.strip() and not body.drive_input.strip():
+        raise HTTPException(400, "บอกมาก่อนว่าอยากได้อะไร")
+
+    capacity, history = _capacity_and_history(user["id"])
+    vault_count = db.query_one(
+        "SELECT COUNT(*) AS n FROM vault_docs WHERE user_id = ?", (user["id"],)
+    )["n"]
+
+    plan = brain.build_plan(
+        prompt=body.prompt,
+        drive_input=body.drive_input,
+        drive_output=body.drive_output,
+        capacity=capacity,
+        history=history,
+        vault_available=vault_count,
+    )
+    data = plan.as_dict()
+
+    # ผู้ใช้สั่งทับการตัดสินใจเรื่องคลังความรู้ได้
+    if body.use_vault is not None:
+        data["uses_vault"] = bool(body.use_vault) and bool(vault_count)
+
+    if data["uses_vault"]:
+        _, hits = _vault_context(user["id"], body.prompt)
+        data["vault_hits"] = [
+            {"title": hit["title"], "score": hit["score"]} for hit in hits
+        ]
+        data["uses_vault"] = bool(hits)
+
+    # ขยายรายละเอียดโมเดลให้หน้าเว็บแสดงได้เลย
+    for step in data["steps"]:
+        model = catalog.get(step["model"]) or {}
+        step["model_label"] = model.get("label", step["model"])
+        step["vram_mb"] = model.get("vram_mb", 0)
+        step["warm"] = step["model"] in capacity["warm"]
+
+    data["capacity"] = capacity
+    return data
+
+
 @router.post("/jobs")
 def submit_job(body: JobRequest, user: dict = Depends(auth.require_user)) -> dict:
-    model = catalog.get(body.model)
-    if model is None:
-        raise HTTPException(400, f"ไม่รู้จักโมเดล '{body.model}'")
+    """ส่งงานเข้าคิว — เลือกโมเดลเองก็ได้ หรือใส่ model='auto' ให้ระบบเลือกให้."""
     if not body.prompt.strip() and not body.drive_input.strip():
         raise HTTPException(400, "ต้องมีคำสั่ง (prompt) หรือไฟล์จาก Drive อย่างน้อยหนึ่งอย่าง")
 
-    now = time.time()
-    job_id = f"job_{uuid.uuid4().hex[:12]}"
-    payload = {
-        "prompt": body.prompt,
-        "system": body.system,
-        "max_tokens": body.max_tokens,
-        "temperature": body.temperature,
-        "repo": model["repo"],
-        "quantize": model["quantize"],
-        "drive_input": body.drive_input,
-        "drive_output": body.drive_output,
-        **body.extra,
-    }
-    title = body.title.strip() or (body.prompt.strip()[:60] or model["label"])
-    db.execute(
-        """INSERT INTO jobs
-           (id, user_id, kind, model, title, payload, status, priority, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (job_id, user["id"], model["kind"], model["id"], title,
-         json.dumps(payload, ensure_ascii=False), "queued", body.priority, now),
-    )
-    db.execute(
-        "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
-        (job_id, now, "info", "เข้าคิวแล้ว รอเครื่องว่าง"),
-    )
-    events.publish(
-        user["id"],
-        "job",
-        {"action": "queued", "job_id": job_id, "model": model["id"], "title": title},
+    capacity, history = _capacity_and_history(user["id"])
+    auto = body.model.strip().lower() in {"auto", "", "อัตโนมัติ"}
+
+    if auto:
+        vault_count = db.query_one(
+            "SELECT COUNT(*) AS n FROM vault_docs WHERE user_id = ?", (user["id"],)
+        )["n"]
+        plan = brain.build_plan(
+            prompt=body.prompt, drive_input=body.drive_input,
+            drive_output=body.drive_output, capacity=capacity, history=history,
+            vault_available=vault_count,
+        )
+        steps = [step.as_dict() for step in plan.steps]
+        plan_data = plan.as_dict()
+        uses_vault = plan.uses_vault
+        # คำสั่งขั้นสูงจากผู้ใช้ยังมีสิทธิ์ทับค่าที่ระบบคิดไว้
+        if body.system:
+            steps[0]["system"] = body.system
+    else:
+        model = catalog.get(body.model)
+        if model is None:
+            raise HTTPException(400, f"ไม่รู้จักโมเดล '{body.model}'")
+        steps = [{
+            "kind": model["kind"], "model": model["id"],
+            "title": body.title.strip() or body.prompt.strip()[:60] or model["label"],
+            "prompt": body.prompt, "system": body.system,
+            "max_tokens": body.max_tokens, "temperature": body.temperature,
+            "drive_input": body.drive_input, "drive_output": body.drive_output,
+        }]
+        plan_data = {"reason": "ผู้ใช้เลือกโมเดลเอง", "steps": steps, "manual": True}
+        uses_vault = False
+        plan_data["eta_seconds"] = round(
+            brain.estimate_seconds(model["id"], history, set(capacity["warm"]),
+                                   capacity["queue_ahead"]), 1)
+
+    if body.title.strip():
+        steps[0]["title"] = body.title.strip()
+
+    context = ""
+    if uses_vault:
+        context, hits = _vault_context(user["id"], body.prompt)
+        plan_data["vault_hits"] = [
+            {"title": hit["title"], "score": hit["score"]} for hit in hits
+        ]
+
+    first, rest = steps[0], steps[1:]
+    eta = plan_data.get("eta_seconds", 0)
+    job_id = pipeline.create_job(
+        user["id"], first, chain=rest, plan=plan_data, priority=body.priority,
+        eta_seconds=eta, context=context,
+        log_message=(
+            f"เข้าคิวแล้ว · {plan_data.get('reason', '')[:180]}"
+            if auto else "เข้าคิวแล้ว รอเครื่องว่าง"
+        ),
     )
 
-    online = db.query_one(
-        "SELECT COUNT(*) AS n FROM workers WHERE user_id = ? AND last_seen_at > ?",
-        (user["id"], now - ONLINE_WINDOW),
-    )["n"]
+    events.publish(
+        user["id"], "job",
+        {"action": "queued", "job_id": job_id, "model": first["model"],
+         "title": first.get("title", ""), "steps": len(steps)},
+    )
+
+    # ไม่มีเครื่องเลย = บอกวิธีแก้ที่ทำได้จริงก่อน ค่อยว่ากันเรื่องเครื่องไม่พอทีหลัง
+    if not capacity["online"]:
+        hint = "ยังไม่มีเครื่องออนไลน์ — เปิดโน้ตบุ๊ก Colab แล้วเชื่อมเครื่องก่อน"
+    else:
+        hint = scheduler.blocked_reason(user["id"], first["model"], first["kind"])
     return {
         "job_id": job_id,
         "status": "queued",
-        "online_workers": online,
-        "hint": "" if online else "ยังไม่มีเครื่องออนไลน์ — เปิดโน้ตบุ๊ก Colab แล้วเชื่อมเครื่องก่อน",
+        "model": first["model"],
+        "steps": len(steps),
+        "auto": auto,
+        "reason": plan_data.get("reason", ""),
+        "eta_seconds": eta,
+        "uses_vault": bool(context),
+        "online_workers": capacity["online"],
+        "hint": hint,
     }
 
 
@@ -220,7 +330,12 @@ def stats(user: dict = Depends(auth.require_user)) -> dict:
            FROM jobs WHERE user_id=? AND status='done' AND started_at IS NOT NULL""",
         (uid,),
     )
+    capacity = scheduler.capacity_for(uid)
     return {
+        "capacity": capacity,
+        "warm_labels": [
+            (catalog.get(model) or {}).get("label", model) for model in capacity["warm"]
+        ],
         "jobs_total": db.query_one("SELECT COUNT(*) AS n FROM jobs WHERE user_id=?", (uid,))["n"],
         "jobs_done": done["n"],
         "avg_seconds": round(done["avg_s"], 2),

@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import auth, db, events
+from .. import auth, brain, catalog, db, events, pipeline, scheduler
 from ..security import hash_token, new_pair_code, new_worker_token
 
 router = APIRouter(prefix="/api/v1", tags=["workers"])
@@ -41,6 +41,7 @@ class HeartbeatRequest(BaseModel):
     gpu_vram_mb: int = 0
     drive_mounted: bool = False
     status: str = "idle"
+    warm_models: list[str] = Field(default_factory=list)   # โมเดลที่ค้างอยู่ใน VRAM
 
 
 class ProgressRequest(BaseModel):
@@ -65,7 +66,12 @@ def worker_status(row) -> str:
 def worker_public(row) -> dict:
     status = worker_status(row)
     vram = row["gpu_vram_mb"] or 0
+    warm = db.loads(row["warm_models"], [])
     return {
+        "warm_models": warm,
+        "warm_labels": [
+            (catalog.get(model) or {}).get("label", model) for model in warm
+        ],
         "id": row["id"],
         "name": row["name"],
         "status": status,
@@ -212,7 +218,7 @@ def heartbeat(body: HeartbeatRequest, worker: dict = Depends(authed_worker)) -> 
     now = time.time()
     db.execute(
         """UPDATE workers SET last_seen_at=?, status=?, gpu_used_mb=?, gpu_util=?,
-                  drive_mounted=?,
+                  drive_mounted=?, warm_models=?,
                   gpu_name=COALESCE(NULLIF(?, ''), gpu_name),
                   gpu_vram_mb=CASE WHEN ? > 0 THEN ? ELSE gpu_vram_mb END
            WHERE id=?""",
@@ -222,6 +228,7 @@ def heartbeat(body: HeartbeatRequest, worker: dict = Depends(authed_worker)) -> 
             body.gpu_used_mb,
             body.gpu_util,
             int(body.drive_mounted),
+            json.dumps(body.warm_models[:12]),
             body.gpu_name,
             body.gpu_vram_mb,
             body.gpu_vram_mb,
@@ -239,36 +246,25 @@ def heartbeat(body: HeartbeatRequest, worker: dict = Depends(authed_worker)) -> 
 
 @router.post("/worker/lease")
 def lease_job(worker: dict = Depends(authed_worker)) -> dict:
-    """หยิบงานถัดไปจากคิวของเจ้าของเครื่อง (คิวตามลำดับความสำคัญ แล้วค่อยตามเวลา)."""
-    reap_stale_jobs()
-    now = time.time()
-    with db.tx() as conn:
-        row = conn.execute(
-            """SELECT * FROM jobs
-               WHERE user_id = ? AND status = 'queued'
-               ORDER BY priority ASC, created_at ASC LIMIT 1""",
-            (worker["user_id"],),
-        ).fetchone()
-        if row is None:
-            return {"job": None}
-        # อ้าง status เดิมใน WHERE กันสองเครื่องแย่งงานเดียวกัน
-        updated = conn.execute(
-            """UPDATE jobs SET status='running', worker_id=?, started_at=?, progress_at=?, progress=0.01
-               WHERE id=? AND status='queued'""",
-            (worker["id"], now, now, row["id"]),
-        )
-        if updated.rowcount == 0:
-            return {"job": None}
-        conn.execute("UPDATE workers SET status='busy' WHERE id=?", (worker["id"],))
+    """รับงานที่ *เหมาะกับเครื่องนี้ที่สุด* ไม่ใช่แค่งานที่มาก่อน.
 
+    ตัวจัดสรรจะข้ามงานที่ VRAM ของเครื่องนี้ไม่พอ และให้น้ำหนักกับงานที่ใช้
+    โมเดลซึ่งโหลดค้างอยู่ในเครื่องแล้ว เพราะเริ่มรันได้ทันทีโดยไม่ต้องโหลดใหม่.
+    """
+    reap_stale_jobs()
+    row, reason = scheduler.claim_next_job(worker)
+    if row is None:
+        return {"job": None}
+
+    now = time.time()
     db.execute(
         "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
-        (row["id"], now, "info", f"เครื่อง {worker['name']} รับงานแล้ว"),
+        (row["id"], now, "info", f"เครื่อง {worker['name']} รับงานแล้ว — {reason}"),
     )
     events.publish(
         worker["user_id"],
         "job",
-        {"action": "started", "job_id": row["id"], "worker": worker["name"]},
+        {"action": "started", "job_id": row["id"], "worker": worker["name"], "reason": reason},
     )
     return {
         "job": {
@@ -325,34 +321,63 @@ def complete_job(
         raise HTTPException(404, "ไม่พบงานนี้ หรือไม่ได้ถูกมอบหมายให้เครื่องนี้")
 
     now = time.time()
-    status = "failed" if body.error else "done"
-    db.execute(
-        """UPDATE jobs SET status=?, result=?, error=?, progress=?, finished_at=?
-           WHERE id=?""",
-        (status, body.result, body.error, 1.0 if status == "done" else row["progress"], now, job_id),
-    )
     db.execute(
         "UPDATE workers SET status='idle', jobs_done = jobs_done + 1 WHERE id=?",
         (worker["id"],),
     )
+
+    # ── ล้มเหลว: ลองกู้เองก่อน แล้วค่อยยอมแพ้ ──────────────────
+    if body.error:
+        fallback = pipeline.maybe_recover(row, body.error)
+        if fallback:
+            return {"ok": True, "status": "requeued", "fallback_model": fallback}
+
+        db.execute(
+            "UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
+            (body.error, now, job_id),
+        )
+        db.execute(
+            "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+            (job_id, now, "error", body.error[:2000]),
+        )
+        # ลูกโซ่ที่ค้างอยู่ต้องหยุด ไม่ใช่เดินต่อด้วยข้อมูลที่ไม่มี
+        if db.loads(row["chain"], []):
+            db.execute(
+                "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+                (job_id, now, "warn", "หยุดลูกโซ่ที่เหลือไว้ เพราะขั้นนี้ไม่สำเร็จ"),
+            )
+        events.publish(
+            worker["user_id"],
+            "job",
+            {"action": "finished", "job_id": job_id, "status": "failed",
+             "duration": round(now - (row["started_at"] or now), 2), "meta": body.meta},
+        )
+        return {"ok": True, "status": "failed"}
+
+    # ── สำเร็จ ────────────────────────────────────────────────
+    db.execute(
+        """UPDATE jobs SET status='done', result=?, error='', progress=1.0, finished_at=?
+           WHERE id=?""",
+        (body.result, now, job_id),
+    )
     db.execute(
         "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
-        (
-            job_id,
-            now,
-            "error" if body.error else "success",
-            body.error[:2000] if body.error else "ทำงานเสร็จสมบูรณ์",
-        ),
+        (job_id, now, "success", "ทำงานเสร็จสมบูรณ์"),
     )
+
+    fresh = db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    next_job_id = pipeline.advance_chain(fresh)
+
     events.publish(
         worker["user_id"],
         "job",
         {
             "action": "finished",
             "job_id": job_id,
-            "status": status,
+            "status": "done",
             "duration": round(now - (row["started_at"] or now), 2),
             "meta": body.meta,
+            "next_job_id": next_job_id,
         },
     )
-    return {"ok": True, "status": status}
+    return {"ok": True, "status": "done", "next_job_id": next_job_id}

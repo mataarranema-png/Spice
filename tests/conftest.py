@@ -53,7 +53,8 @@ def worker(user_client):
             "gpu_name": "Tesla T4",
             "gpu_vram_mb": 15360,
             "driver": "535.104",
-            "capabilities": ["text", "image"],
+            # ตรงกับที่ตัวแทนเครื่องจริงบน Colab T4 ประกาศไว้
+            "capabilities": ["text", "image", "audio", "embedding"],
         },
     ).json()
     return {

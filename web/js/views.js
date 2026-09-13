@@ -72,6 +72,23 @@ Spice.views.overview = async function () {
           </div>
         </div>
 
+        <div class="card card--brain">
+          <div class="card-head"><h3>🧠 ความพร้อมของระบบ</h3></div>
+          <div class="stack" style="gap:0.7rem">
+            <div class="row row--between">
+              <span class="small muted">โมเดลที่พร้อมรันทันที</span>
+              <strong class="small">${(stats.warm_labels || []).length}</strong>
+            </div>
+            ${(stats.warm_labels || []).length ? `
+              <div class="row row--wrap" style="gap:0.3rem">
+                ${stats.warm_labels.map((label) =>
+                  `<span class="pill pill--online" style="font-size:0.7rem">⚡ ${Spice.esc(label)}</span>`).join("")}
+              </div>
+              <div class="tiny dim">โมเดลเหล่านี้ค้างอยู่ใน VRAM แล้ว งานที่ใช้มันจะเริ่มได้ทันทีโดยไม่ต้องรอโหลด</div>`
+              : `<div class="tiny dim">ยังไม่มีโมเดลค้างใน VRAM — งานแรกของแต่ละโมเดลจะใช้เวลาโหลดก่อน</div>`}
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head"><h3>⏱ ประสิทธิภาพ</h3></div>
           <div class="stack" style="gap:0.85rem">
@@ -165,9 +182,21 @@ Spice.renderWorkerCard = function (worker) {
 
       <div class="row row--wrap" style="gap:0.4rem;margin-top:0.9rem">
         ${worker.drive_mounted ? `<span class="tag">🗄️ เมานต์ Drive แล้ว</span>` : ""}
-        ${(worker.capabilities || []).map((cap) => `<span class="tag">${Spice.esc(cap)}</span>`).join("")}
+        ${(worker.capabilities || []).map((cap) =>
+          `<span class="tag">${Spice.esc(Spice.KIND_LABEL[cap] || cap)}</span>`).join("")}
         <span class="tag">ทำไปแล้ว ${worker.jobs_done} งาน</span>
       </div>
+
+      ${(worker.warm_labels || []).length ? `
+        <div style="margin-top:0.8rem">
+          <div class="tiny dim" style="margin-bottom:0.3rem">
+            ⚡ โมเดลที่ค้างอยู่ใน VRAM — งานที่ใช้โมเดลเหล่านี้จะถูกส่งมาที่เครื่องนี้ก่อน
+          </div>
+          <div class="row row--wrap" style="gap:0.3rem">
+            ${worker.warm_labels.map((label) =>
+              `<span class="pill pill--online" style="font-size:0.7rem">${Spice.esc(label)}</span>`).join("")}
+          </div>
+        </div>` : ""}
 
       <div class="row row--between" style="margin-top:1rem">
         <span class="tiny dim">สัญญาณล่าสุด ${Spice.ago(worker.last_seen_at)}</span>
@@ -195,35 +224,78 @@ Spice.renderWorkerMini = function (worker) {
 };
 
 /* ═══ สั่งงาน AI ═══════════════════════════════════════════ */
+Spice.KIND_LABEL = { text: "ข้อความ", image: "รูปภาพ", audio: "เสียง", embedding: "เวกเตอร์" };
+
 Spice.views.studio = async function () {
   const data = await Spice.get("/api/v1/models");
   Spice.state.models = data.models;
-  const selected = Spice.state.selectedModel && data.models.find((m) => m.id === Spice.state.selectedModel)
-    ? Spice.state.selectedModel
-    : data.models[0].id;
-  Spice.state.selectedModel = selected;
-
-  const KIND_LABEL = { text: "ข้อความ", image: "รูปภาพ", audio: "เสียง", embedding: "เวกเตอร์" };
+  if (Spice.state.selectedModel !== "auto" &&
+      !data.models.find((m) => m.id === Spice.state.selectedModel)) {
+    Spice.state.selectedModel = "auto";
+  }
+  Spice.state.selectedModel = Spice.state.selectedModel || "auto";
 
   return `
     <div class="view-head">
       <h2>✦ สั่งงาน AI</h2>
-      <p class="small dim">เลือกโมเดล พิมพ์สิ่งที่อยากได้ แล้วกดรัน — งานจะถูกส่งไปยังการ์ดจอที่ว่างอยู่</p>
+      <p class="small dim">พิมพ์สิ่งที่อยากได้เป็นภาษาคน — ระบบจะเลือกโมเดล ตั้งค่า และวางลำดับงานให้เอง</p>
     </div>
 
-    <div class="grid grid--split-wide">
-      <div class="card">
-        <div class="card-head">
-          <h3>เลือกโมเดล</h3>
-          <span class="tiny dim">${data.best_vram_mb ? `VRAM สูงสุดที่มี ${Spice.gb(data.best_vram_mb)}` : "ยังไม่มีเครื่องออนไลน์"}</span>
+    <div class="card card--brain">
+      <div class="card-head">
+        <h3>🧠 บอกมาว่าอยากได้อะไร</h3>
+        <span class="pill pill--brand" id="mode-pill">โหมดอัตโนมัติ</span>
+      </div>
+
+      <textarea id="f-prompt" rows="4" style="margin-bottom:0.8rem"
+        placeholder="เช่น: ถอดเสียงไฟล์ประชุมใน Drive แล้วสรุปเป็นข้อ ๆ พร้อมสิ่งที่ต้องทำต่อ"></textarea>
+
+      <div class="grid grid--2" style="gap:0.7rem;margin-bottom:0.9rem">
+        <label class="field" style="margin:0">
+          <span>ไฟล์ต้นทางใน Drive (ถ้ามี)</span>
+          <input type="text" id="f-in" placeholder="gdrive:audio/meeting.m4a">
+        </label>
+        <label class="field" style="margin:0">
+          <span>บันทึกผลลงโฟลเดอร์ Drive (ถ้าต้องการ)</span>
+          <input type="text" id="f-out" placeholder="gdrive:spice/outputs">
+        </label>
+      </div>
+
+      <div class="row row--between row--wrap" style="gap:0.6rem">
+        <span class="tiny dim" id="run-hint">ระบบจะอ่านคำสั่งแล้วตัดสินใจให้ — กด “ดูแผนก่อน” เพื่อตรวจก่อนรันได้</span>
+        <div class="row" style="gap:0.5rem">
+          <button class="btn btn--sm" onclick="Spice.previewPlan()">🔍 ดูแผนก่อน</button>
+          <button class="btn btn--primary btn--lg" id="run-btn" onclick="Spice.submitJob()">✦ รันเลย</button>
         </div>
-        <div class="stack" style="gap:0.6rem">
+      </div>
+    </div>
+
+    <div id="plan-slot"></div>
+    <div id="live-job"></div>
+
+    <details class="card" id="manual-box" ${Spice.state.selectedModel === "auto" ? "" : "open"}>
+      <summary class="row row--between" style="cursor:pointer;user-select:none;list-style:none">
+        <span><strong>⚙ เลือกโมเดลเอง</strong>
+          <span class="tiny dim">— ถ้าอยากคุมทุกอย่างด้วยตัวเอง</span></span>
+        <span class="tiny dim">${data.best_vram_mb ? `VRAM สูงสุดที่มี ${Spice.gb(data.best_vram_mb)}` : "ยังไม่มีเครื่องออนไลน์"}</span>
+      </summary>
+
+      <div style="padding-top:1.1rem">
+        <div class="grid grid--2" style="gap:0.6rem">
+          <div class="model-card ${Spice.state.selectedModel === "auto" ? "selected" : ""}"
+               data-model="auto" onclick="Spice.pickModel('auto')">
+            <div class="row row--between" style="gap:0.5rem">
+              <div class="model-card__name">🧠 ให้ระบบเลือกให้ (แนะนำ)</div>
+              <span class="tag">อัตโนมัติ</span>
+            </div>
+            <div class="model-card__blurb">อ่านคำสั่ง ดูภาษา ดูชนิดงาน แล้วจับคู่กับ VRAM ที่มีอยู่จริง</div>
+          </div>
           ${data.models.map((model) => `
-            <div class="model-card ${model.id === selected ? "selected" : ""}"
+            <div class="model-card ${model.id === Spice.state.selectedModel ? "selected" : ""}"
                  data-model="${model.id}" onclick="Spice.pickModel('${model.id}')">
               <div class="row row--between" style="gap:0.5rem">
                 <div class="model-card__name">${Spice.esc(model.label)}</div>
-                <span class="tag">${KIND_LABEL[model.kind] || model.kind}</span>
+                <span class="tag">${Spice.KIND_LABEL[model.kind] || model.kind}</span>
               </div>
               <div class="model-card__blurb">${Spice.esc(model.blurb)}</div>
               <div class="row row--wrap" style="gap:0.3rem">
@@ -235,64 +307,36 @@ Spice.views.studio = async function () {
               </div>
             </div>`).join("")}
         </div>
-      </div>
 
-      <div class="stack">
-        <div class="card">
-          <label class="field">
-            <span>คำสั่งของคุณ</span>
-            <textarea id="f-prompt" rows="7" placeholder="เช่น: สรุปเอกสารนี้เป็นข้อ ๆ ภาษาไทย แล้วเสนอ 3 ขั้นตอนถัดไป"></textarea>
+        <div class="grid grid--2" style="gap:0.9rem;margin-top:1.1rem">
+          <label class="field" style="margin:0">
+            <span>คำสั่งระบบ (บอกบุคลิก/กติกาให้โมเดล)</span>
+            <textarea id="f-system" rows="2" placeholder="คุณคือผู้ช่วยที่ตอบเป็นภาษาไทย กระชับ ตรงประเด็น"></textarea>
           </label>
-
-          <details style="margin-bottom:0.9rem">
-            <summary class="small muted" style="cursor:pointer;user-select:none">⚙ ตัวเลือกขั้นสูง</summary>
-            <div style="padding-top:0.9rem">
-              <label class="field">
-                <span>คำสั่งระบบ (บอกบุคลิก/กติกาให้โมเดล)</span>
-                <textarea id="f-system" rows="2" placeholder="คุณคือผู้ช่วยที่ตอบเป็นภาษาไทย กระชับ ตรงประเด็น"></textarea>
-              </label>
-              <div class="grid grid--2" style="gap:0.9rem">
-                <label class="field">
-                  <span>ความยาวคำตอบสูงสุด · <b id="v-tokens">512</b> โทเคน</span>
-                  <input type="range" id="f-tokens" min="64" max="4096" step="64" value="512"
-                         oninput="document.getElementById('v-tokens').textContent=this.value">
-                </label>
-                <label class="field">
-                  <span>ความสร้างสรรค์ · <b id="v-temp">0.7</b></span>
-                  <input type="range" id="f-temp" min="0" max="1.5" step="0.05" value="0.7"
-                         oninput="document.getElementById('v-temp').textContent=this.value">
-                </label>
-                <label class="field">
-                  <span>ไฟล์ต้นทางใน Drive</span>
-                  <input type="text" id="f-in" placeholder="gdrive:docs/รายงาน.txt">
-                </label>
-                <label class="field">
-                  <span>บันทึกผลลงโฟลเดอร์ Drive</span>
-                  <input type="text" id="f-out" placeholder="gdrive:spice/outputs">
-                </label>
-              </div>
-              <label class="field" style="margin:0">
-                <span>ลำดับความสำคัญ (1 = ด่วนที่สุด)</span>
-                <select id="f-priority">
-                  <option value="1">1 · ด่วนมาก แซงทุกงาน</option>
-                  <option value="5" selected>5 · ปกติ</option>
-                  <option value="9">9 · ทำตอนว่าง</option>
-                </select>
-              </label>
-            </div>
-          </details>
-
-          <div class="row row--between row--wrap">
-            <span class="tiny dim" id="run-hint"></span>
-            <button class="btn btn--primary btn--lg" id="run-btn" onclick="Spice.submitJob()">
-              ✦ ส่งเข้าคิวรัน
-            </button>
+          <div>
+            <label class="field">
+              <span>ความยาวคำตอบสูงสุด · <b id="v-tokens">768</b> โทเคน</span>
+              <input type="range" id="f-tokens" min="64" max="4096" step="64" value="768"
+                     oninput="document.getElementById('v-tokens').textContent=this.value">
+            </label>
+            <label class="field" style="margin:0">
+              <span>ความสร้างสรรค์ · <b id="v-temp">0.6</b></span>
+              <input type="range" id="f-temp" min="0" max="1.5" step="0.05" value="0.6"
+                     oninput="document.getElementById('v-temp').textContent=this.value">
+            </label>
           </div>
         </div>
 
-        <div id="live-job"></div>
+        <label class="field" style="margin:0.9rem 0 0">
+          <span>ลำดับความสำคัญ (1 = ด่วนที่สุด)</span>
+          <select id="f-priority">
+            <option value="1">1 · ด่วนมาก แซงทุกงาน</option>
+            <option value="5" selected>5 · ปกติ</option>
+            <option value="9">9 · ทำตอนว่าง</option>
+          </select>
+        </label>
       </div>
-    </div>`;
+    </details>`;
 };
 
 Spice.pickModel = function (modelId) {
@@ -300,13 +344,115 @@ Spice.pickModel = function (modelId) {
   document.querySelectorAll(".model-card").forEach((card) => {
     card.classList.toggle("selected", card.dataset.model === modelId);
   });
-  const model = Spice.state.models.find((m) => m.id === modelId);
+  const pill = document.getElementById("mode-pill");
   const hint = document.getElementById("run-hint");
+  if (!pill) return;
+
+  if (modelId === "auto") {
+    pill.className = "pill pill--brand";
+    pill.textContent = "โหมดอัตโนมัติ";
+    if (hint) hint.textContent = "ระบบจะอ่านคำสั่งแล้วตัดสินใจให้ — กด “ดูแผนก่อน” เพื่อตรวจก่อนรันได้";
+    return;
+  }
+  const model = Spice.state.models.find((m) => m.id === modelId);
+  pill.className = "pill pill--info";
+  pill.textContent = "เลือกเอง";
   if (hint && model) {
     hint.textContent = model.runnable_now
-      ? `พร้อมรัน ${model.label} บนเครื่องที่ออนไลน์อยู่`
-      : `⚠ ยังไม่มีเครื่องที่ VRAM ถึง ${Spice.gb(model.vram_mb)} — งานจะรอในคิวจนกว่าจะมีเครื่องที่ไหว`;
+      ? `จะรัน ${model.label} ตามที่คุณเลือก`
+      : `⚠ ยังไม่มีเครื่องที่ VRAM ถึง ${Spice.gb(model.vram_mb)} — งานจะรอในคิว`;
   }
+};
+
+/* ── แผนที่สมองคิดไว้ ──────────────────────────────────────── */
+Spice.previewPlan = async function () {
+  const prompt = document.getElementById("f-prompt").value.trim();
+  const driveIn = document.getElementById("f-in").value.trim();
+  if (!prompt && !driveIn) {
+    return Spice.toast("บอกมาก่อนว่าอยากได้อะไร", "warn");
+  }
+  const slot = document.getElementById("plan-slot");
+  slot.innerHTML = `<div class="card row" style="gap:0.6rem"><span class="spinner"></span>
+    <span class="small muted">กำลังคิดแผน…</span></div>`;
+  try {
+    const plan = await Spice.post("/api/v1/plan", {
+      prompt, drive_input: driveIn,
+      drive_output: document.getElementById("f-out").value.trim(),
+    });
+    Spice.state.plan = plan;
+    slot.innerHTML = Spice.renderPlan(plan);
+  } catch (error) {
+    slot.innerHTML = `<div class="card">${Spice.empty("⚠️", "คิดแผนไม่สำเร็จ", Spice.esc(error.message))}</div>`;
+  }
+};
+
+Spice.renderPlan = function (plan) {
+  const intent = plan.intent || {};
+  const chip = (label) => `<span class="tag">${Spice.esc(label)}</span>`;
+  return `
+    <div class="card card--plan page-enter">
+      <div class="card-head">
+        <h3>🧠 แผนที่ระบบคิดไว้</h3>
+        <div class="row" style="gap:0.4rem">
+          <span class="pill pill--info">≈ ${Spice.duration(plan.eta_seconds)}</span>
+          <button class="btn btn--primary btn--sm" onclick="Spice.submitJob()">รันตามแผนนี้ →</button>
+        </div>
+      </div>
+
+      <p class="small" style="margin-bottom:1rem">${Spice.esc(plan.reason)}</p>
+
+      <div class="row row--wrap" style="gap:0.35rem;margin-bottom:1rem">
+        ${chip(`ภาษา: ${{ th: "ไทย", en: "อังกฤษ", mixed: "ผสม" }[intent.language] || intent.language}`)}
+        ${chip(`ชนิดงาน: ${Spice.KIND_LABEL[intent.kind] || intent.kind}`)}
+        ${intent.kind === "text" ? chip(`ความยาว: ${{ short: "สั้น", standard: "ปกติ", long: "ยาว" }[intent.length] || intent.length}`) : ""}
+        ${intent.kind === "text" ? chip(`ความสร้างสรรค์ ${intent.temperature}`) : ""}
+        ${plan.uses_vault ? `<span class="pill pill--online" style="font-size:0.72rem">🧠 ใช้คลังความรู้</span>` : ""}
+      </div>
+
+      <div class="steps-flow">
+        ${plan.steps.map((step, index) => `
+          <div class="step-node">
+            <div class="step-node__num">${index + 1}</div>
+            <div class="grow" style="min-width:0">
+              <div class="row row--between" style="gap:0.5rem">
+                <strong class="small">${Spice.esc(step.title)}</strong>
+                ${step.warm
+                  ? `<span class="pill pill--online" style="font-size:0.7rem">⚡ โหลดไว้แล้ว</span>`
+                  : ""}
+              </div>
+              <div class="tiny dim">
+                ${Spice.esc(step.model_label || step.model)} ·
+                ${Spice.KIND_LABEL[step.kind] || step.kind} ·
+                ${Spice.gb(step.vram_mb)}
+                ${step.use_previous ? " · รับผลจากขั้นก่อนหน้า" : ""}
+                ${step.drive_output ? ` · บันทึกไป ${Spice.esc(step.drive_output)}` : ""}
+              </div>
+            </div>
+          </div>`).join('<div class="step-arrow">↓</div>')}
+      </div>
+
+      ${(plan.vault_hits || []).length ? `
+        <div style="margin-top:1rem">
+          <div class="tiny dim" style="margin-bottom:0.35rem">เอกสารที่จะดึงมาเป็นบริบท</div>
+          <div class="row row--wrap" style="gap:0.3rem">
+            ${plan.vault_hits.map((hit) =>
+              `<span class="tag">${Spice.esc(hit.title)} · ${Math.round(hit.score * 100)}%</span>`).join("")}
+          </div>
+        </div>` : ""}
+
+      ${(plan.warnings || []).length ? `
+        <div class="notice" style="margin-top:1rem">
+          ${plan.warnings.map((warning) => `<div>⚠ ${Spice.esc(warning)}</div>`).join("")}
+        </div>` : ""}
+
+      ${(intent.signals || []).length ? `
+        <details style="margin-top:0.9rem">
+          <summary class="tiny dim" style="cursor:pointer">ระบบอ่านคำสั่งได้ว่าอย่างไร</summary>
+          <ul class="tiny dim" style="margin:0.45rem 0 0;padding-left:1.1rem">
+            ${intent.signals.map((signal) => `<li>${Spice.esc(signal)}</li>`).join("")}
+          </ul>
+        </details>` : ""}
+    </div>`;
 };
 
 Spice.submitJob = async function () {
@@ -318,28 +464,37 @@ Spice.submitJob = async function () {
     return;
   }
 
+  const manual = Spice.state.selectedModel !== "auto";
   button.disabled = true;
   button.innerHTML = `<span class="spinner"></span> กำลังส่ง…`;
   try {
     const body = {
-      model: Spice.state.selectedModel,
+      model: Spice.state.selectedModel || "auto",
       prompt,
-      system: document.getElementById("f-system").value.trim(),
-      max_tokens: Number(document.getElementById("f-tokens").value),
-      temperature: Number(document.getElementById("f-temp").value),
-      priority: Number(document.getElementById("f-priority").value),
       drive_input: driveIn,
       drive_output: document.getElementById("f-out").value.trim(),
+      system: (document.getElementById("f-system") || {}).value?.trim() || "",
+      priority: Number((document.getElementById("f-priority") || {}).value || 5),
     };
+    if (manual) {
+      body.max_tokens = Number(document.getElementById("f-tokens").value);
+      body.temperature = Number(document.getElementById("f-temp").value);
+    }
     const result = await Spice.post("/api/v1/jobs", body);
     Spice.state.watchJob = result.job_id;
-    Spice.toast(result.hint || "ส่งงานเข้าคิวแล้ว", result.hint ? "warn" : "ok");
+    document.getElementById("plan-slot").innerHTML = "";
+
+    if (result.hint) Spice.toast(result.hint, "warn", 6000);
+    else if (result.auto) {
+      Spice.toast(`เลือก ${result.model} ให้แล้ว · คาดว่าเสร็จใน ${Spice.duration(result.eta_seconds)}`, "ok");
+    } else Spice.toast("ส่งงานเข้าคิวแล้ว", "ok");
+
     await Spice.renderLiveJob(result.job_id);
   } catch (error) {
     Spice.toast(error.message, "error");
   } finally {
     button.disabled = false;
-    button.innerHTML = "✦ ส่งเข้าคิวรัน";
+    button.innerHTML = "✦ รันเลย";
   }
 };
 
@@ -349,6 +504,7 @@ Spice.renderLiveJob = async function (jobId) {
   const { job, log, worker } = await Spice.get(`/api/v1/jobs/${jobId}`);
   const status = Spice.JOB_STATUS[job.status] || Spice.JOB_STATUS.queued;
   const pending = job.status === "queued" || job.status === "running";
+  const plan = job.plan || {};
 
   slot.innerHTML = `
     <div class="card">
@@ -364,8 +520,13 @@ Spice.renderLiveJob = async function (jobId) {
       <div class="row row--wrap tiny dim" style="gap:0.9rem;margin-bottom:0.9rem">
         <span>โมเดล ${Spice.esc(job.model)}</span>
         ${worker ? `<span>เครื่อง ${Spice.esc(worker.name)}</span>` : `<span>ยังไม่มีเครื่องรับงาน</span>`}
-        ${job.duration !== undefined ? `<span>ใช้เวลา ${Spice.duration(job.duration)}</span>` : ""}
+        ${job.duration !== undefined ? `<span>ใช้เวลา ${Spice.duration(job.duration)}</span>`
+          : (pending && job.eta_seconds ? `<span>คาดว่า ≈ ${Spice.duration(job.eta_seconds)}</span>` : "")}
+        ${job.chain_left ? `<span class="pill pill--info" style="font-size:0.7rem">เหลืออีก ${job.chain_left} ขั้น</span>` : ""}
+        ${job.attempt > 1 ? `<span class="pill pill--busy" style="font-size:0.7rem">ลองใหม่ครั้งที่ ${job.attempt}</span>` : ""}
       </div>
+      ${plan.reason && !plan.manual
+        ? `<p class="tiny dim" style="margin:-0.4rem 0 0.9rem">🧠 ${Spice.esc(plan.reason)}</p>` : ""}
       ${job.result ? `<div class="result">${Spice.renderResult(job)}</div>` : ""}
       ${job.error ? `<div class="result" style="color:var(--danger)">${Spice.esc(job.error)}</div>` : ""}
       <details ${pending ? "open" : ""} style="margin-top:0.8rem">
@@ -434,6 +595,10 @@ Spice.renderJobList = function (jobs) {
           <div class="job__meta">
             ${Spice.esc(job.model)} · ${Spice.ago(job.created_at)}
             ${job.duration !== undefined ? ` · ${Spice.duration(job.duration)}` : ""}
+            ${job.status === "queued" && job.eta_seconds ? ` · คาดว่า ≈ ${Spice.duration(job.eta_seconds)}` : ""}
+            ${job.chain_left ? ` · เหลืออีก ${job.chain_left} ขั้น` : ""}
+            ${job.parent_id ? " · ต่อจากงานก่อนหน้า" : ""}
+            ${job.attempt > 1 ? ` · ลองใหม่ครั้งที่ ${job.attempt}` : ""}
           </div>
           ${job.status === "running"
             ? `<div class="bar" style="margin-top:0.4rem"><i style="width:${Math.round(job.progress * 100)}%"></i></div>`
@@ -466,6 +631,28 @@ Spice.openJob = async function (jobId) {
       <div><div class="tiny dim">ใช้เวลา</div><strong class="small">${Spice.duration(job.duration)}</strong></div>
       <div><div class="tiny dim">ส่งเมื่อ</div><strong class="small">${Spice.ago(job.created_at)}</strong></div>
     </div>
+
+    ${(job.plan && job.plan.reason && !job.plan.manual) ? `
+      <div class="card--plan card" style="padding:0.9rem 1rem;margin-bottom:1rem">
+        <div class="tiny dim" style="margin-bottom:0.3rem">🧠 ระบบตัดสินใจอย่างไร</div>
+        <div class="small">${Spice.esc(job.plan.reason)}</div>
+        ${(job.plan.steps || []).length > 1 ? `
+          <div class="tiny dim" style="margin-top:0.5rem">
+            ลูกโซ่ ${job.plan.steps.length} ขั้น:
+            ${job.plan.steps.map((step, index) =>
+              `${index + 1}. ${Spice.esc(step.title)}`).join(" → ")}
+          </div>` : ""}
+        ${(job.plan.warnings || []).length ? `
+          <div class="tiny" style="margin-top:0.5rem;color:var(--warn)">
+            ${job.plan.warnings.map((warning) => `⚠ ${Spice.esc(warning)}`).join("<br>")}
+          </div>` : ""}
+      </div>` : ""}
+
+    ${job.attempt > 1 ? `
+      <div class="notice" style="margin-bottom:1rem">
+        🔁 งานนี้ล้มเพราะหน่วยความจำ GPU ไม่พอ ระบบจึงลดขนาดโมเดลแล้วลองใหม่ให้อัตโนมัติ
+        (ครั้งที่ ${job.attempt})
+      </div>` : ""}
 
     ${job.payload?.prompt ? `
       <div class="tiny dim" style="margin-bottom:0.3rem">คำสั่งที่ส่งไป</div>

@@ -41,6 +41,7 @@ def heartbeat_loop(server: str, token: str, state: dict) -> None:
         try:
             call(server, "/api/v1/worker/heartbeat", {
                 "status": state["status"],
+                "warm_models": state["warm"],
                 "gpu_used_mb": used,
                 "gpu_util": random.randint(1, 8) if state["status"] == "idle" else random.randint(72, 99),
                 "gpu_name": "Tesla T4",
@@ -81,7 +82,7 @@ def main() -> int:
     token = data["worker_token"]
     print(f"✅ จับคู่สำเร็จ: {data['worker_id']} (บัญชี {data.get('owner_email')})")
 
-    state = {"status": "idle"}
+    state = {"status": "idle", "warm": []}
     threading.Thread(target=heartbeat_loop, args=(args.server, token, state), daemon=True).start()
     print("🚀 พร้อมรับงาน — กด Ctrl+C เพื่อหยุด")
 
@@ -109,8 +110,10 @@ def main() -> int:
                 "result": REPLY,
                 "meta": {"tokens": random.randint(180, 420), "tokens_per_second": round(random.uniform(18, 34), 1)},
             }, token)
+            if job["model"] not in state["warm"]:
+                state["warm"] = ([*state["warm"], job["model"]])[-4:]
             state["status"] = "idle"
-            print(f"✅ ส่งผลลัพธ์ของ {job['id']} กลับแล้ว")
+            print(f"✅ ส่งผลลัพธ์ของ {job['id']} กลับแล้ว (โมเดลค้างใน VRAM: {state['warm']})")
     except KeyboardInterrupt:
         STOP.set()
         print("\n👋 ปิดเครื่องจำลอง")
