@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     priority    INTEGER NOT NULL DEFAULT 5,
     created_at  REAL NOT NULL,
     started_at  REAL,
+    progress_at REAL,          -- สัญญาณล่าสุดจาก worker ใช้ตัดสินว่างานค้างจริงไหม
     finished_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id, created_at DESC);

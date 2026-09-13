@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/v1", tags=["workers"])
 
 PAIR_CODE_TTL = 15 * 60      # รหัสจับคู่มีอายุ 15 นาที
 ONLINE_WINDOW = 75           # ไม่ส่งสัญญาณเกินเท่านี้ = ออฟไลน์
-LEASE_TIMEOUT = 15 * 60      # งานที่ค้างเกินนี้ถือว่า worker หลุด
+LEASE_TIMEOUT = 15 * 60      # ไม่มีสัญญาณจาก worker นานเกินนี้ถือว่าเครื่องหลุด
 
 
 # ── โมเดลข้อมูลเข้า ───────────────────────────────────────────
@@ -97,11 +97,18 @@ def authed_worker(authorization: str = Header(default="")) -> dict:
 
 
 def reap_stale_jobs() -> None:
-    """งานที่ worker รับไปแล้วเงียบหาย → คืนกลับคิวให้เครื่องอื่นทำต่อ."""
+    """งานที่ worker รับไปแล้วเงียบหาย → คืนกลับคิวให้เครื่องอื่นทำต่อ.
+
+    นับจาก progress_at (สัญญาณล่าสุด) ไม่ใช่ started_at — งานที่ใช้เวลานาน
+    เช่นดาวน์โหลดน้ำหนักโมเดลครั้งแรก จึงไม่ถูกโยนกลับเข้าคิวทั้งที่ยังทำอยู่.
+    """
     cutoff = time.time() - LEASE_TIMEOUT
     db.execute(
-        """UPDATE jobs SET status='queued', worker_id=NULL, started_at=NULL, progress=0
-           WHERE status='running' AND started_at IS NOT NULL AND started_at < ?""",
+        """UPDATE jobs
+           SET status='queued', worker_id=NULL, started_at=NULL, progress_at=NULL, progress=0
+           WHERE status='running'
+             AND COALESCE(progress_at, started_at) IS NOT NULL
+             AND COALESCE(progress_at, started_at) < ?""",
         (cutoff,),
     )
 
@@ -246,9 +253,9 @@ def lease_job(worker: dict = Depends(authed_worker)) -> dict:
             return {"job": None}
         # อ้าง status เดิมใน WHERE กันสองเครื่องแย่งงานเดียวกัน
         updated = conn.execute(
-            """UPDATE jobs SET status='running', worker_id=?, started_at=?, progress=0.01
+            """UPDATE jobs SET status='running', worker_id=?, started_at=?, progress_at=?, progress=0.01
                WHERE id=? AND status='queued'""",
-            (worker["id"], now, row["id"]),
+            (worker["id"], now, now, row["id"]),
         )
         if updated.rowcount == 0:
             return {"job": None}
@@ -284,7 +291,10 @@ def report_progress(
     if row is None:
         raise HTTPException(404, "ไม่พบงานนี้ หรือไม่ได้ถูกมอบหมายให้เครื่องนี้")
     progress = max(0.0, min(1.0, float(body.progress)))
-    db.execute("UPDATE jobs SET progress = ? WHERE id = ?", (progress, job_id))
+    db.execute(
+        "UPDATE jobs SET progress = ?, progress_at = ? WHERE id = ?",
+        (progress, time.time(), job_id),
+    )
     if body.message:
         db.execute(
             "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",

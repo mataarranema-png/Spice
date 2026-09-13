@@ -124,3 +124,47 @@ def test_users_cannot_see_each_others_jobs(user_client, client):
     client.post("/auth/dev", params={"email": "other@spice.local", "name": "Other"})
     assert client.get(f"/api/v1/jobs/{job_id}").status_code == 404
     assert client.get("/api/v1/jobs").json()["jobs"] == []
+
+
+def test_silent_worker_loses_its_job_back_to_the_queue(user_client, worker):
+    """เครื่องที่เงียบหายเกินเวลา ต้องคืนงานกลับเข้าคิวให้เครื่องอื่นทำต่อ."""
+    import time as _time
+
+    from server import db
+    from server.routers import workers as workers_module
+
+    job_id = _submit(user_client).json()["job_id"]
+    user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"])
+
+    # แกล้งให้สัญญาณล่าสุดเก่าเกินกำหนด
+    db.execute(
+        "UPDATE jobs SET progress_at = ?, started_at = ? WHERE id = ?",
+        (_time.time() - workers_module.LEASE_TIMEOUT - 60,
+         _time.time() - workers_module.LEASE_TIMEOUT - 60, job_id),
+    )
+    workers_module.reap_stale_jobs()
+    assert user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]["status"] == "queued"
+
+
+def test_slow_job_with_recent_progress_is_not_reaped(user_client, worker):
+    """งานที่ยังส่งความคืบหน้าอยู่ (เช่นกำลังโหลดโมเดลนาน ๆ) ต้องไม่ถูกโยนกลับคิว."""
+    import time as _time
+
+    from server import db
+    from server.routers import workers as workers_module
+
+    job_id = _submit(user_client).json()["job_id"]
+    user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"])
+
+    # เริ่มมานานมากแล้ว แต่เพิ่งรายงานความคืบหน้าเมื่อครู่นี้
+    db.execute(
+        "UPDATE jobs SET started_at = ? WHERE id = ?",
+        (_time.time() - workers_module.LEASE_TIMEOUT * 3, job_id),
+    )
+    user_client.post(
+        f"/api/v1/worker/jobs/{job_id}/progress",
+        json={"progress": 0.3, "message": "กำลังดาวน์โหลดน้ำหนักโมเดล"},
+        headers=worker["headers"],
+    )
+    workers_module.reap_stale_jobs()
+    assert user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]["status"] == "running"
