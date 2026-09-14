@@ -94,10 +94,17 @@ def list_models(user: dict = Depends(auth.require_user)) -> dict:
         (user["id"], time.time() - ONLINE_WINDOW),
     )
     best_vram = max((row["gpu_vram_mb"] for row in rows), default=0)
-    models = []
-    for model in catalog.MODELS:
-        models.append({**model, "runnable_now": bool(rows) and best_vram >= model["vram_mb"]})
-    return {"models": models, "kinds": catalog.KINDS, "best_vram_mb": best_vram}
+    available = catalog.models_for(user["id"])
+    models = [
+        {**model, "runnable_now": bool(rows) and best_vram >= model["vram_mb"]}
+        for model in available
+    ]
+    return {
+        "models": models,
+        "kinds": sorted({model["kind"] for model in available}),
+        "best_vram_mb": best_vram,
+        "custom_count": len([model for model in available if model.get("custom")]),
+    }
 
 
 @router.post("/plan")
@@ -118,6 +125,7 @@ def make_plan(body: PlanRequest, user: dict = Depends(auth.require_user)) -> dic
         capacity=capacity,
         history=history,
         vault_available=vault_count,
+        models=catalog.models_for(user["id"]),
     )
     data = plan.as_dict()
 
@@ -159,7 +167,7 @@ def submit_job(body: JobRequest, user: dict = Depends(auth.require_user)) -> dic
         plan = brain.build_plan(
             prompt=body.prompt, drive_input=body.drive_input,
             drive_output=body.drive_output, capacity=capacity, history=history,
-            vault_available=vault_count,
+            vault_available=vault_count, models=catalog.models_for(user["id"]),
         )
         steps = [step.as_dict() for step in plan.steps]
         plan_data = plan.as_dict()
@@ -171,6 +179,8 @@ def submit_job(body: JobRequest, user: dict = Depends(auth.require_user)) -> dic
         model = catalog.get(body.model)
         if model is None:
             raise HTTPException(400, f"ไม่รู้จักโมเดล '{body.model}'")
+        if not catalog.owns(body.model, user["id"]):
+            raise HTTPException(403, "โมเดลนี้ไม่ได้อยู่ในคลังของคุณ")
         steps = [{
             "kind": model["kind"], "model": model["id"],
             "title": body.title.strip() or body.prompt.strip()[:60] or model["label"],

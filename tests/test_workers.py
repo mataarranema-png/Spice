@@ -57,14 +57,38 @@ def test_revoked_worker_loses_access(user_client, worker):
     assert resp.status_code == 401
 
 
-def test_connect_snippet_contains_pair_code(user_client):
+def test_connect_snippet_covers_colab_and_your_own_computer(user_client):
     code = user_client.post("/api/v1/workers/pair", json={}).json()["pair_code"]
     body = user_client.get("/api/v1/connect-snippet", params={"pair_code": code}).json()
-    assert code in body["one_liner"]
-    assert "bootstrap.py" in body["one_liner"]
+
+    targets = {target["id"]: target for target in body["targets"]}
+    assert set(targets) == {"colab", "windows", "unix"}
+    for target in targets.values():
+        assert code in target["command"]          # ทุกคำสั่งต้องพกรหัสจับคู่ไปด้วย
+        assert target["steps"] and target["blurb"]
+
+    assert "install.ps1" in targets["windows"]["command"]
+    assert "install.sh" in targets["unix"]["command"]
+    assert "spice_agent.py" in targets["colab"]["command"]
 
 
-def test_bootstrap_script_is_served(client):
-    resp = client.get("/colab/bootstrap.py")
+def test_agent_script_is_served(client):
+    resp = client.get("/agent/spice_agent.py")
     assert resp.status_code == 200
-    assert "Spice Worker" in resp.text
+    assert "Spice Agent" in resp.text
+    assert "def main()" in resp.text
+
+
+def test_old_colab_path_still_serves_the_same_agent(client):
+    """โน้ตบุ๊กที่คนก๊อปไปแล้วชี้ทางเดิมอยู่ ต้องไม่พังเพราะเราเปลี่ยนชื่อไฟล์."""
+    assert client.get("/colab/bootstrap.py").text == client.get("/agent/spice_agent.py").text
+
+
+def test_installers_are_served(client):
+    unix = client.get("/install.sh")
+    windows = client.get("/install.ps1")
+    assert unix.status_code == 200 and "Spice Agent" in unix.text
+    assert windows.status_code == 200 and "spice_agent.py" in windows.text
+    # ตัวติดตั้งต้องดึงตัวแทนเครื่องจากเซิร์ฟเวอร์เดียวกัน ไม่ใช่จากที่อื่น
+    assert "/agent/spice_agent.py" in unix.text
+    assert "/agent/spice_agent.py" in windows.text

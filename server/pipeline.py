@@ -42,6 +42,7 @@ def build_payload(step: dict, previous_result: str = "", context: str = "") -> d
         "temperature": float(step.get("temperature", 0.6)),
         "repo": model.get("repo", ""),
         "quantize": model.get("quantize", "fp16"),
+        "trust_remote_code": bool(model.get("trust_remote_code")),
         "drive_input": step.get("drive_input", ""),
         "drive_output": step.get("drive_output", ""),
     }
@@ -134,7 +135,7 @@ def maybe_recover(row, error: str) -> str | None:
     if not brain.is_out_of_memory(error) or row["attempt"] >= MAX_ATTEMPTS:
         return None
 
-    fallback = brain.smaller_alternative(row["model"])
+    fallback = brain.smaller_alternative(row["model"], catalog.models_for(row["user_id"]))
     if fallback is None:
         return None
 
@@ -142,6 +143,7 @@ def maybe_recover(row, error: str) -> str | None:
     payload = db.loads(row["payload"], {})
     payload["repo"] = model["repo"]
     payload["quantize"] = model["quantize"]
+    payload["trust_remote_code"] = bool(model.get("trust_remote_code"))
     now = time.time()
 
     db.execute(

@@ -119,6 +119,34 @@ CREATE TABLE IF NOT EXISTS vault_docs (
 );
 CREATE INDEX IF NOT EXISTS idx_vault ON vault_docs(user_id, collection);
 
+-- โมเดลที่ผู้ใช้ดึงมาเองจาก Hugging Face (นอกเหนือจากแค็ตตาล็อกในตัว)
+CREATE TABLE IF NOT EXISTS custom_models (
+    id                TEXT PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    repo              TEXT NOT NULL,
+    label             TEXT NOT NULL DEFAULT '',
+    kind              TEXT NOT NULL DEFAULT 'text',
+    quantize          TEXT NOT NULL DEFAULT 'fp16',
+    vram_mb           INTEGER NOT NULL DEFAULT 0,
+    params_b          REAL NOT NULL DEFAULT 0,
+    blurb             TEXT NOT NULL DEFAULT '',
+    tags              TEXT NOT NULL DEFAULT '[]',
+    gated             INTEGER NOT NULL DEFAULT 0,
+    trust_remote_code INTEGER NOT NULL DEFAULT 0,
+    downloads         INTEGER NOT NULL DEFAULT 0,
+    likes             INTEGER NOT NULL DEFAULT 0,
+    added_at          REAL NOT NULL,
+    UNIQUE (user_id, repo)
+);
+CREATE INDEX IF NOT EXISTS idx_custom_models ON custom_models(user_id, added_at DESC);
+
+-- ความลับอื่น ๆ ของผู้ใช้ (เก็บแบบเข้ารหัสทั้งหมด) เช่นโทเคน Hugging Face
+CREATE TABLE IF NOT EXISTS user_secrets (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    hf_token   TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts      REAL NOT NULL,

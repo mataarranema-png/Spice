@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Spice Worker — ตัวแทนเครื่องที่เอา GPU มาให้ระบบใช้ (ออกแบบมาเพื่อ Google Colab T4).
+"""Spice Agent — ตัวแทนเครื่อง ยกการ์ดจอของเครื่องนี้ให้ระบบใช้.
 
-วิธีใช้ใน Colab (เซลล์เดียว):
-    !curl -sSL https://<เซิร์ฟเวอร์ของคุณ>/colab/bootstrap.py -o spice_worker.py \
-      && python spice_worker.py --server https://<เซิร์ฟเวอร์ของคุณ> --pair XXXX-XXXX
+ใช้ได้ทั้งบน **Google Colab** และ **คอมพิวเตอร์ของคุณเอง** (Windows / macOS / Linux)
 
-สคริปต์นี้จะ:
-  1) จับคู่กับบัญชี Google ของคุณด้วยรหัสจับคู่ (ไม่ต้องใส่รหัสผ่านใด ๆ)
-  2) รายงานสถานะการ์ดจอเข้าหน้าเว็บทุก 20 วินาที
-  3) เมานต์ Google Drive ด้วย rclone โดยใช้สิทธิ์ที่คุณอนุญาตไว้แล้ว
-  4) ดึงงานจากคิวมารันบน GPU แล้วส่งผลลัพธ์กลับ
+ครั้งแรก — จับคู่ด้วยรหัสจากหน้าเว็บ:
+    python spice_agent.py --server https://เซิร์ฟเวอร์ของคุณ --pair XXXX-XXXX
 
-ออกจากระบบ: กดหยุดเซลล์ (■) — เครื่องจะขึ้นสถานะออฟไลน์ภายในไม่กี่วินาที
+ครั้งต่อไป — ไม่ต้องใส่รหัสอีก เพราะจำไว้ที่ ~/.spice/config.json แล้ว:
+    python spice_agent.py
+
+สิ่งที่มันทำ:
+  1) ตรวจว่าเครื่องนี้มีอะไรให้ใช้ — NVIDIA (CUDA), Apple Silicon (MPS) หรือ CPU
+  2) จับคู่กับบัญชีของคุณครั้งเดียว แล้วเก็บกุญแจไว้ใช้ต่อ
+  3) รายงานสถานะเครื่องเข้าหน้าเว็บทุก 20 วินาที
+  4) เมานต์ Google Drive ด้วย rclone (ถ้าคุณอนุญาตสิทธิ์ไว้)
+  5) ดึงงานจากคิวมารันแล้วส่งผลลัพธ์กลับ
+
+หยุดทำงาน: กด Ctrl+C (บน Colab กดปุ่มหยุดเซลล์) — เครื่องจะขึ้นออฟไลน์ในไม่กี่วินาที
 """
 
 from __future__ import annotations
@@ -37,7 +42,38 @@ except ImportError:  # pragma: no cover - Colab มี requests อยู่แ�
 
 HEARTBEAT_SECONDS = 20
 POLL_SECONDS = 3
-RCLONE_MOUNT = "/content/gdrive"
+
+IS_COLAB = os.path.isdir("/content") and "COLAB_RELEASE_TAG" in os.environ or os.path.isdir("/content/sample_data")
+RCLONE_MOUNT = "/content/gdrive" if os.path.isdir("/content") else os.path.expanduser("~/spice-gdrive")
+
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".spice")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+
+def load_config() -> dict:
+    """กุญแจที่เคยจับคู่ไว้ — ทำให้เปิดเครื่องครั้งหน้าไม่ต้องขอรหัสใหม่."""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(data: dict) -> None:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    try:
+        os.chmod(CONFIG_PATH, 0o600)     # กุญแจเครื่อง ห้ามให้ผู้ใช้อื่นอ่านได้
+    except OSError:
+        pass
+
+
+def clear_config() -> None:
+    try:
+        os.remove(CONFIG_PATH)
+    except OSError:
+        pass
 
 _stop = threading.Event()
 _model_cache: dict[str, object] = {}
@@ -78,43 +114,89 @@ def pip_install(*packages: str) -> None:
 
 
 # ── ข้อมูลการ์ดจอ ────────────────────────────────────────────
+def _apple_silicon() -> tuple[str, int]:
+    """ชิป Apple และหน่วยความจำรวม (Apple ใช้แรมร่วมกับ GPU จึงนับเป็น VRAM ได้)."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return "", 0
+    _, chip = run(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=10)
+    code, memory = run(["sysctl", "-n", "hw.memsize"], timeout=10)
+    total_mb = int(int(memory) / 1024**2) if code == 0 and memory.isdigit() else 0
+    # กันไว้ให้ระบบปฏิบัติการ ~30% ไม่งั้นเครื่องจะหน่วงจนใช้งานอย่างอื่นไม่ได้
+    return (chip or "Apple Silicon"), int(total_mb * 0.7)
+
+
+def detect_device() -> str:
+    """cuda | mps | cpu — ตัวแทนเครื่องนี้จะรันโมเดลด้วยอะไร."""
+    if shutil.which("nvidia-smi"):
+        code, _ = run(["nvidia-smi", "-L"], timeout=15)
+        if code == 0:
+            return "cuda"
+    if _apple_silicon()[0]:
+        return "mps"
+    return "cpu"
+
+
 def gpu_info() -> dict:
-    """อ่านสเปกการ์ดจอผ่าน nvidia-smi (ไม่ต้องพึ่ง torch ตอนเริ่มต้น)."""
+    """สเปกของเครื่องนี้ — รองรับทั้ง NVIDIA, Apple Silicon และเครื่องที่มีแต่ CPU."""
     info = {
         "gpu_name": "",
         "gpu_vram_mb": 0,
         "gpu_used_mb": 0,
         "gpu_util": 0,
         "driver": "",
-        "runtime": f"python {platform.python_version()} / {platform.system()}",
+        "runtime": f"python {platform.python_version()} / {platform.system()} {platform.machine()}",
     }
-    code, out = run(
-        [
-            "nvidia-smi",
-            "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version",
-            "--format=csv,noheader,nounits",
-        ],
-        timeout=20,
+
+    device = detect_device()
+    if device == "cuda":
+        code, out = run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            timeout=20,
+        )
+        if code == 0 and out:
+            parts = [item.strip() for item in out.splitlines()[0].split(",")]
+            if len(parts) >= 5:
+                info.update(
+                    gpu_name=parts[0],
+                    gpu_vram_mb=int(float(parts[1])),
+                    gpu_used_mb=int(float(parts[2])),
+                    gpu_util=int(float(parts[3])),
+                    driver=f"CUDA {parts[4]}",
+                )
+        return info
+
+    if device == "mps":
+        chip, usable_mb = _apple_silicon()
+        info.update(gpu_name=f"{chip} (Metal)", gpu_vram_mb=usable_mb, driver="Apple MPS")
+        return info
+
+    # เครื่องที่มีแต่ CPU ยังทำงานได้ แค่ช้ากว่ามาก — รายงานแรมที่ใช้ได้แทน
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        ram_mb = int(pages / 1024**2 * 0.6)
+    except (ValueError, OSError, AttributeError):
+        ram_mb = 0
+    info.update(
+        gpu_name=f"CPU · {platform.processor() or platform.machine()}",
+        gpu_vram_mb=ram_mb,
+        driver="ไม่มีการ์ดจอ",
     )
-    if code == 0 and out:
-        parts = [item.strip() for item in out.splitlines()[0].split(",")]
-        if len(parts) >= 5:
-            info.update(
-                gpu_name=parts[0],
-                gpu_vram_mb=int(float(parts[1])),
-                gpu_used_mb=int(float(parts[2])),
-                gpu_util=int(float(parts[3])),
-                driver=parts[4],
-            )
     return info
 
 
 def capabilities() -> list[str]:
-    caps = ["text"]
+    """งานชนิดไหนที่เครื่องนี้รับไหว — เซิร์ฟเวอร์ใช้ตัดสินว่าจะส่งงานอะไรมาให้."""
+    caps = ["text", "embedding"]
     info = gpu_info()
-    if info["gpu_vram_mb"] >= 8000:
+    device = detect_device()
+    if device != "cpu" and info["gpu_vram_mb"] >= 8000:
         caps += ["image", "audio"]
-    caps.append("embedding")
+    elif device != "cpu" and info["gpu_vram_mb"] >= 5000:
+        caps.append("audio")     # ถอดเสียงกินหน่วยความจำน้อยกว่าสร้างภาพ
     return caps
 
 
@@ -193,6 +275,23 @@ class SpiceClient:
 
     def rclone_conf(self) -> str:
         return self.get("/api/v1/worker/rclone").get("conf", "")
+
+    def hf_token(self) -> str:
+        """โทเคน Hugging Face ของเจ้าของเครื่อง — ใช้โหลดโมเดลที่ต้องขอสิทธิ์."""
+        try:
+            return self.get("/api/v1/hub/worker/token").get("hf_token", "")
+        except Exception:
+            return ""
+
+
+def apply_hf_token(token: str) -> bool:
+    if not token:
+        return False
+    # transformers/huggingface_hub อ่านจากตัวแปรเหล่านี้
+    os.environ["HF_TOKEN"] = token
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = token
+    return True
 
 
 # ── เมานต์ Google Drive ด้วย rclone ───────────────────────────
@@ -278,12 +377,22 @@ def run_text(job: dict, client: SpiceClient) -> tuple[str, dict]:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     torch = _torch()
+    device = detect_device()
     quantize = payload.get("quantize", "fp16")
+    # การบีบอัดด้วย bitsandbytes ใช้ได้เฉพาะ CUDA — บนเครื่องอื่นต้องกลับไป fp16/fp32
+    if quantize in {"4bit", "8bit"} and device != "cuda":
+        log(f"เครื่องนี้ไม่ใช่ CUDA จึงใช้ {quantize} ไม่ได้ — เปลี่ยนเป็นความละเอียดเต็มแทน", "⚠")
+        quantize = "fp16" if device == "mps" else "fp32"
     cache_key = f"text:{repo}:{quantize}"
 
     if cache_key not in _model_cache:
         client.progress(job["id"], 0.2, "กำลังโหลดน้ำหนักโมเดล (ครั้งแรกใช้เวลาสักครู่)")
-        kwargs: dict = {"device_map": "auto"}
+        trust = bool(payload.get("trust_remote_code"))
+        if trust:
+            log("โมเดลนี้เปิด trust_remote_code — จะรันโค้ดจากผู้สร้างโมเดลด้วย", "⚠")
+        kwargs: dict = {"trust_remote_code": trust}
+        if device == "cuda":
+            kwargs["device_map"] = "auto"
         if quantize == "4bit" and torch.cuda.is_available():
             try:
                 import bitsandbytes  # noqa: F401
@@ -297,10 +406,22 @@ def run_text(job: dict, client: SpiceClient) -> tuple[str, dict]:
                 bnb_4bit_quant_type="nf4",
             )
         else:
-            kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
+            kwargs["torch_dtype"] = torch.float32 if device == "cpu" else torch.float16
 
-        tokenizer = AutoTokenizer.from_pretrained(repo)
+        if quantize == "8bit" and torch.cuda.is_available():
+            try:
+                import bitsandbytes  # noqa: F401
+            except ImportError:
+                pip_install("bitsandbytes")
+            from transformers import BitsAndBytesConfig
+
+            kwargs.pop("torch_dtype", None)
+            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+
+        tokenizer = AutoTokenizer.from_pretrained(repo, trust_remote_code=trust)
         model = AutoModelForCausalLM.from_pretrained(repo, **kwargs)
+        if device != "cuda":
+            model = model.to(device)      # MPS/CPU ต้องย้ายเองเพราะไม่ได้ใช้ device_map
         _model_cache[cache_key] = (tokenizer, model)
 
     tokenizer, model = _model_cache[cache_key]
@@ -364,12 +485,19 @@ def run_image(job: dict, client: SpiceClient) -> tuple[str, dict]:
     cache_key = f"image:{repo}"
     if cache_key not in _model_cache:
         client.progress(job["id"], 0.3, "กำลังโหลดโมเดลภาพ")
-        pipe = AutoPipelineForText2Image.from_pretrained(
-            repo,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            variant="fp16" if torch.cuda.is_available() else None,
-        )
-        pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+        try:
+            pipe = AutoPipelineForText2Image.from_pretrained(
+                repo,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                variant="fp16" if torch.cuda.is_available() else None,
+            )
+        except (OSError, ValueError):
+            # หลายรุ่นที่คนอัปโหลดเองไม่มีไฟล์ variant fp16 แยกไว้
+            pipe = AutoPipelineForText2Image.from_pretrained(
+                repo,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            )
+        pipe = pipe.to(detect_device())
         _model_cache[cache_key] = pipe
 
     pipe = _model_cache[cache_key]
@@ -415,7 +543,7 @@ def run_audio(job: dict, client: SpiceClient) -> tuple[str, dict]:
         _model_cache[cache_key] = pipeline(
             "automatic-speech-recognition",
             model=repo,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=torch.float32 if detect_device() == "cpu" else torch.float16,
             device=0 if torch.cuda.is_available() else -1,
         )
 
@@ -501,7 +629,10 @@ def handle_job(client: SpiceClient, job: dict, state: dict) -> None:
                 import torch
 
                 gc.collect()
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
             except Exception:
                 pass
         try:
@@ -512,34 +643,102 @@ def handle_job(client: SpiceClient, job: dict, state: dict) -> None:
         state["status"] = "idle"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Spice worker — ยืมการ์ดจอให้ระบบ")
-    parser.add_argument("--server", required=True, help="URL ของเซิร์ฟเวอร์ Spice")
-    parser.add_argument("--pair", required=True, help="รหัสจับคู่จากหน้าเว็บ (เช่น K7QD-2M9X)")
-    parser.add_argument("--name", default="", help="ชื่อเครื่องที่จะแสดงในหน้าเว็บ")
-    parser.add_argument("--no-drive", action="store_true", help="ไม่ต้องเมานต์ Google Drive")
-    args = parser.parse_args()
+def resolve_credentials(args, client_factory) -> tuple[object, dict]:
+    """หากุญแจสำหรับเครื่องนี้ — ใช้ของเดิมถ้ามี ไม่งั้นค่อยจับคู่ใหม่.
+
+    นี่คือสิ่งที่ทำให้ใช้บนเครื่องตัวเองได้จริง: จับคู่ครั้งเดียว แล้วเปิดปิด
+    เครื่องกี่ครั้งก็ต่อกลับเข้าระบบเองโดยไม่ต้องไปขอรหัสใหม่ทุกครั้ง.
+    """
+    config = load_config()
+    server = (args.server or config.get("server", "")).rstrip("/")
+    if not server:
+        raise SystemExit(
+            "ยังไม่รู้ว่าเซิร์ฟเวอร์อยู่ที่ไหน — ใส่ --server https://... มาด้วยในครั้งแรก"
+        )
 
     info = gpu_info()
-    name = args.name or (f"Colab · {info['gpu_name']}" if info["gpu_name"] else "Colab CPU")
+    default_name = ("Colab · " if IS_COLAB else "") + (info["gpu_name"] or platform.node())
+    name = args.name or config.get("name") or default_name
 
-    print("═" * 64)
-    print("  🌶  Spice Worker")
-    print(f"  การ์ดจอ : {info['gpu_name'] or 'ไม่พบ GPU (จะทำงานบน CPU ซึ่งช้ามาก)'}")
-    print(f"  VRAM    : {info['gpu_vram_mb']} MB   ไดรเวอร์: {info['driver'] or '-'}")
-    print(f"  เซิร์ฟเวอร์: {args.server}")
-    print("═" * 64)
+    # มีกุญแจเดิมของเซิร์ฟเวอร์เดียวกันอยู่แล้ว และไม่ได้สั่งจับคู่ใหม่
+    if config.get("worker_token") and config.get("server", "").rstrip("/") == server and not args.pair:
+        client = client_factory(server, config["worker_token"], config.get("worker_id", ""))
+        try:
+            client.heartbeat("idle", False)
+            log(f"ต่อกลับเข้าระบบด้วยกุญแจเดิม · เครื่อง {config.get('worker_id', '')}", "🔑")
+            return client, {"name": name, "server": server}
+        except Exception as exc:
+            if "401" in str(exc):
+                log("กุญแจเดิมถูกเพิกถอนไปแล้ว — ต้องจับคู่ใหม่", "⚠")
+                clear_config()
+            else:
+                raise
 
-    if not info["gpu_name"]:
-        log("แนะนำให้เปลี่ยนเป็น GPU ก่อน: Runtime → Change runtime type → T4 GPU", "⚠")
+    if not args.pair:
+        raise SystemExit(
+            "ยังไม่เคยจับคู่เครื่องนี้ — เปิดหน้าเว็บ ไปที่ 'เครื่อง GPU → เชื่อมเครื่องใหม่'\n"
+            "แล้วรันอีกครั้งพร้อมรหัส:  --pair XXXX-XXXX"
+        )
 
-    client = SpiceClient(args.server)
-    try:
-        data = client.register(args.pair, name)
-    except Exception as exc:
-        log(f"จับคู่ไม่สำเร็จ: {exc}", "❌")
-        return 1
+    client = client_factory(server)
+    data = client.register(args.pair, name)
+    save_config({
+        "server": server,
+        "worker_id": client.worker_id,
+        "worker_token": client.token,
+        "name": name,
+        "owner": data.get("owner_email", ""),
+        "paired_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    })
     log(f"จับคู่สำเร็จกับบัญชี {data.get('owner_email', '')} · เครื่อง {client.worker_id}", "🔗")
+    log(f"เก็บกุญแจไว้ที่ {CONFIG_PATH} — ครั้งหน้ารันเปล่า ๆ ได้เลย", "💾")
+    return client, {"name": name, "server": server}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Spice agent — ยกการ์ดจอของเครื่องนี้ให้ระบบใช้",
+    )
+    parser.add_argument("--server", default="", help="URL ของเซิร์ฟเวอร์ Spice (ใส่ครั้งแรกครั้งเดียว)")
+    parser.add_argument("--pair", default="", help="รหัสจับคู่จากหน้าเว็บ (เฉพาะครั้งแรก)")
+    parser.add_argument("--name", default="", help="ชื่อเครื่องที่จะแสดงในหน้าเว็บ")
+    parser.add_argument("--no-drive", action="store_true", help="ไม่ต้องเมานต์ Google Drive")
+    parser.add_argument("--reset", action="store_true", help="ลืมกุญแจเดิมแล้วเริ่มจับคู่ใหม่")
+    args = parser.parse_args()
+
+    if args.reset:
+        clear_config()
+        log("ลบกุญแจเดิมแล้ว", "🧹")
+
+    info = gpu_info()
+    device = detect_device()
+    device_label = {
+        "cuda": "การ์ดจอ NVIDIA", "mps": "ชิป Apple (Metal)", "cpu": "CPU เท่านั้น",
+    }[device]
+
+    print("═" * 64)
+    print("  🌶  Spice Agent")
+    print(f"  เครื่อง  : {platform.node()}  ({device_label})")
+    print(f"  หน่วยประมวลผล: {info['gpu_name'] or 'ไม่พบ'}")
+    print(f"  หน่วยความจำที่ใช้ได้: {info['gpu_vram_mb']} MB   {info['driver']}")
+    print("═" * 64)
+
+    if device == "cpu":
+        log("เครื่องนี้ไม่มีการ์ดจอที่ใช้เร่งได้ — รันได้แต่ช้ามาก เหมาะกับทดสอบเท่านั้น", "⚠")
+        if IS_COLAB:
+            log("บน Colab เปลี่ยนได้ที่ Runtime → Change runtime type → T4 GPU", "💡")
+
+    try:
+        client, settings = resolve_credentials(args, SpiceClient)
+    except SystemExit as exc:
+        print(f"\n❌ {exc}\n")
+        return 1
+    except Exception as exc:
+        log(f"เชื่อมต่อไม่สำเร็จ: {exc}", "❌")
+        return 1
+
+    if apply_hf_token(client.hf_token()):
+        log("ตั้งค่าโทเคน Hugging Face แล้ว — โหลดโมเดลที่ต้องขอสิทธิ์ได้", "🔑")
 
     state = {"status": "idle", "drive_mounted": False}
     if not args.no_drive:

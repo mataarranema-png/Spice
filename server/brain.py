@@ -240,75 +240,101 @@ def analyze(prompt: str, drive_input: str = "") -> Intent:
 
 
 # ── ขั้นที่ 2 · เลือกโมเดลให้พอดีกับเครื่องที่มีอยู่จริง ───────
-def _candidates(kind: str) -> list[dict]:
-    return [model for model in catalog.MODELS if model["kind"] == kind]
+THAI_MARKERS = ("typhoon", "thai", "ไทย", "sailor", "sea-lion", "wangchan", "openthai")
 
 
-def pick_model(intent: Intent, capacity: dict) -> tuple[str, str, list[str]]:
+def _candidates(kind: str, models: list[dict] | None = None) -> list[dict]:
+    pool = models if models is not None else catalog.MODELS
+    return [model for model in pool if model.get("kind") == kind]
+
+
+def _thai_friendly(model: dict) -> bool:
+    haystack = " ".join([
+        model.get("id", ""), model.get("repo", ""), model.get("label", ""),
+        " ".join(str(tag) for tag in model.get("tags", [])),
+    ]).lower()
+    return any(marker in haystack for marker in THAI_MARKERS)
+
+
+def _score(model: dict, intent: Intent, warm: set[str]) -> tuple[float, list[str]]:
+    """ให้คะแนนโมเดลหนึ่งตัวกับงานหนึ่งชิ้น พร้อมเก็บเหตุผลไว้อธิบายผู้ใช้.
+
+    ใช้คะแนนแทนรายการตายตัว เพื่อให้โมเดลที่ผู้ใช้ดึงมาเองจาก Hugging Face
+    เข้าร่วมการตัดสินใจได้ด้วย ไม่ใช่มีสิทธิ์แค่โมเดลที่เราเตรียมไว้ให้.
+    """
+    params = model.get("params_b") or 0
+    score = 0.0
+    why: list[str] = []
+
+    if model["id"] in warm:
+        score += 40
+        why.append("โหลดค้างไว้ในเครื่องแล้ว เริ่มได้ทันที")
+
+    if intent.kind == "text":
+        if intent.task in HEAVY_TASKS or intent.length == "long":
+            score += params * 3
+            if params >= 7:
+                why.append("เป็นงานที่ต้องให้เหตุผลเยอะ จึงเลือกโมเดลตัวใหญ่")
+        else:
+            score += max(0.0, 20 - params * 2)
+            if params <= 4:
+                why.append("เป็นงานตรงไปตรงมา โมเดลเล็กตอบไวกว่า")
+
+        if intent.language == "th" and _thai_friendly(model):
+            score += 15
+            why.append("ฝึกมากับภาษาไทยโดยเฉพาะ")
+
+    if model.get("custom"):
+        score += 8        # ผู้ใช้อุตส่าห์ดึงมาเอง แปลว่าตั้งใจจะใช้
+        why.append("เป็นโมเดลที่คุณดึงมาเอง")
+
+    return score, why
+
+
+def pick_model(
+    intent: Intent, capacity: dict, models: list[dict] | None = None
+) -> tuple[str, str, list[str]]:
     """คืน (model_id, เหตุผล, คำเตือน) โดยดูทั้งเจตนาและ VRAM ที่ว่างอยู่จริง."""
     best_vram = capacity.get("best_vram_mb", 0)
     warm: set[str] = set(capacity.get("warm", ()))
     warnings: list[str] = []
-    pool = _candidates(intent.kind)
 
-    if intent.kind != "text":
-        model = pool[0]
-        reason = f"งานชนิด “{intent.kind}” มีโมเดลเฉพาะทางอยู่ตัวเดียวคือ {model['label']}"
-        if best_vram and best_vram < model["vram_mb"]:
-            warnings.append(
-                f"เครื่องที่ออนไลน์มี VRAM {best_vram} MB ซึ่งน้อยกว่าที่ {model['label']} "
-                f"ต้องใช้ ({model['vram_mb']} MB) — งานจะรอจนกว่าจะมีเครื่องที่ไหว"
-            )
-        return model["id"], reason, warnings
-
-    # เรียงจากตัวที่ "อยากได้ที่สุด" ลงมา ตามลักษณะงานและภาษา
-    if intent.task in HEAVY_TASKS or intent.length == "long":
-        # ตัวใหญ่ก่อนเสมอ ส่วนตัวสำรองเลือกตามภาษาของคำสั่ง
-        backup = (
-            ["typhoon2-3b-instruct", "llama-3.2-3b-instruct"]
-            if intent.language == "th"
-            else ["llama-3.2-3b-instruct", "typhoon2-3b-instruct"]
+    pool = _candidates(intent.kind, models)
+    if not pool:
+        fallback = _candidates("text", models)
+        if not fallback:
+            raise ValueError(f"ไม่มีโมเดลสำหรับงานชนิด '{intent.kind}' เลย")
+        warnings.append(
+            f"ยังไม่มีโมเดลสำหรับงานชนิด “{intent.kind}” ในคลังของคุณ — "
+            "เพิ่มได้ที่หน้าคลังโมเดล"
         )
-        ranked = ["qwen2.5-7b-instruct", *backup]
-        why = "งานนี้ต้องใช้ความสามารถในการให้เหตุผลสูง จึงเลือกโมเดลตัวใหญ่ที่สุดก่อน"
-    elif intent.language == "th":
-        ranked = ["typhoon2-3b-instruct", "qwen2.5-7b-instruct", "llama-3.2-3b-instruct"]
-        why = "คำสั่งเป็นภาษาไทยและเป็นงานตรงไปตรงมา จึงเลือกโมเดลไทยตัวเล็กที่ตอบไวกว่า"
-    else:
-        ranked = ["llama-3.2-3b-instruct", "qwen2.5-7b-instruct", "typhoon2-3b-instruct"]
-        why = "คำสั่งเป็นภาษาอังกฤษและไม่ซับซ้อน จึงเลือกโมเดลเบาที่ตอบไว"
+        pool = fallback
 
-    # เครื่องที่โหลดโมเดลค้างไว้แล้วเริ่มงานได้ทันที — ได้เปรียบมากพอที่จะสลับอันดับ
-    warm_choice = next((mid for mid in ranked if mid in warm), None)
-    if warm_choice and warm_choice != ranked[0]:
-        first = catalog.get(ranked[0])
-        if not (intent.task in HEAVY_TASKS and warm_choice != ranked[0]):
-            ranked = [warm_choice] + [mid for mid in ranked if mid != warm_choice]
-            why = (
-                f"{catalog.get(warm_choice)['label']} ถูกโหลดค้างไว้ในเครื่องอยู่แล้ว "
-                f"จึงเริ่มงานได้ทันทีโดยไม่ต้องรอโหลดใหม่ (เร็วกว่า {first['label']} มากในรอบแรก)"
-            )
+    fitting = [model for model in pool if not best_vram or model["vram_mb"] <= best_vram]
+    if not fitting:
+        smallest = min(pool, key=lambda model: model["vram_mb"])
+        warnings.append(
+            f"ไม่มีเครื่องไหน VRAM ถึงเลย ({best_vram} MB) — เลือก {smallest['label']} "
+            f"ซึ่งเล็กที่สุด งานจะรอในคิวจนกว่าจะมีเครื่องที่ไหว"
+        )
+        return smallest["id"], f"เลือก {smallest['label']} เพราะเล็กที่สุดเท่าที่มี", warnings
 
-    if best_vram:
-        fitting = [mid for mid in ranked if catalog.get(mid)["vram_mb"] <= best_vram]
-        if not fitting:
-            smallest = min(pool, key=lambda m: m["vram_mb"])
-            warnings.append(
-                f"ไม่มีเครื่องไหน VRAM ถึงเลย ({best_vram} MB) — เลือก {smallest['label']} "
-                f"ซึ่งเล็กที่สุด งานจะรอในคิวจนกว่าจะมีเครื่องที่ไหว"
-            )
-            return smallest["id"], why, warnings
-        if fitting[0] != ranked[0]:
-            wanted = catalog.get(ranked[0])
-            picked = catalog.get(fitting[0])
-            warnings.append(
-                f"อยากใช้ {wanted['label']} แต่ VRAM ที่มี ({best_vram} MB) ไม่พอ "
-                f"จึงลดมาใช้ {picked['label']} แทน"
-            )
-        ranked = fitting
+    scored = sorted(
+        ((_score(model, intent, warm), model) for model in fitting),
+        key=lambda pair: (-pair[0][0], pair[1]["vram_mb"]),
+    )
+    (_, why), chosen = scored[0]
 
-    chosen = catalog.get(ranked[0])
-    return ranked[0], f"{why} → เลือก {chosen['label']}", warnings
+    # ถ้าโมเดลที่ "อยากได้ที่สุด" ถูกตัดเพราะ VRAM ไม่พอ ต้องบอกให้รู้
+    best_overall = max(pool, key=lambda model: _score(model, intent, warm)[0])
+    if best_overall["id"] != chosen["id"] and best_overall["vram_mb"] > best_vram > 0:
+        warnings.append(
+            f"อยากใช้ {best_overall['label']} แต่ VRAM ที่มี ({best_vram} MB) ไม่พอ "
+            f"จึงลดมาใช้ {chosen['label']} แทน"
+        )
+
+    reason = " · ".join(why) if why else "เหมาะกับงานนี้ที่สุดเท่าที่มีอยู่"
+    return chosen["id"], f"{reason} → เลือก {chosen['label']}", warnings
 
 
 # ── ขั้นที่ 3 · ประเมินเวลา ───────────────────────────────────
@@ -340,6 +366,7 @@ def build_plan(
     capacity: dict | None = None,
     history: dict[str, float] | None = None,
     vault_available: int = 0,
+    models: list[dict] | None = None,
 ) -> Plan:
     """แปลงคำสั่งภาษาคนหนึ่งประโยค ให้เป็นแผนงานที่ระบบรันได้จริง."""
     capacity = capacity or {}
@@ -348,7 +375,7 @@ def build_plan(
     intent = analyze(prompt, drive_input)
     text = f"{prompt} {drive_input}".lower()
 
-    model_id, reason, warnings = pick_model(intent, capacity)
+    model_id, reason, warnings = pick_model(intent, capacity, models)
     steps: list[Step] = []
 
     wants_summary = _hits(text, "summarize") or _hits(text, "analyze")
@@ -364,7 +391,7 @@ def build_plan(
         ))
         if wants_summary:
             follow_intent = analyze("สรุปใจความสำคัญ")
-            follow_model, follow_reason, follow_warn = pick_model(follow_intent, capacity)
+            follow_model, follow_reason, follow_warn = pick_model(follow_intent, capacity, models)
             warnings += follow_warn
             steps.append(Step(
                 kind="text", model=follow_model, title="สรุปสิ่งที่ถอดเสียงได้",
@@ -423,13 +450,14 @@ def is_out_of_memory(error: str) -> bool:
     return any(marker in lowered for marker in OOM_MARKERS)
 
 
-def smaller_alternative(model_id: str) -> str | None:
+def smaller_alternative(model_id: str, models: list[dict] | None = None) -> str | None:
     """โมเดลชนิดเดียวกันที่เล็กกว่าตัวปัจจุบันมากที่สุดเท่าที่ยังมี."""
     model = catalog.get(model_id)
     if model is None:
         return None
     smaller = [
-        item for item in _candidates(model["kind"]) if item["vram_mb"] < model["vram_mb"]
+        item for item in _candidates(model["kind"], models)
+        if item["vram_mb"] < model["vram_mb"]
     ]
     if not smaller:
         return None

@@ -6,6 +6,7 @@ const ROUTES = {
   jobs:     { title: "งานทั้งหมด",           crumb: "ประวัติและผลลัพธ์ของทุกงาน" },
   gpu:      { title: "เครื่อง GPU",          crumb: "การ์ดจอที่ยืมมาและสถานะสด" },
   drive:    { title: "Drive & rclone",      crumb: "เชื่อม Google Drive เข้ากับเครื่องที่ยืมมา" },
+  hub:      { title: "คลังโมเดล",            crumb: "ดึงโมเดลจาก Hugging Face มาใช้เองได้ทุกตัว" },
   vault:    { title: "คลังความรู้",          crumb: "ค้นหาเอกสารด้วยความหมาย" },
   settings: { title: "ตั้งค่า",              crumb: "บัญชี สิทธิ์ และการแสดงผล" },
 };
@@ -159,15 +160,17 @@ Spice.connectFlow = async function () {
   Spice.modal(`<div class="center" style="padding:1.4rem"><div class="spinner" style="margin:0 auto 0.8rem"></div>
     <div class="small muted">กำลังสร้างรหัสจับคู่…</div></div>`);
   try {
-    const pair = await Spice.post("/api/v1/workers/pair", { label: "Colab T4" });
-    const snippet = await Spice.get(`/api/v1/connect-snippet?pair_code=${encodeURIComponent(pair.pair_code)}`);
+    const pair = await Spice.post("/api/v1/workers/pair", { label: "เครื่องใหม่" });
+    const snippet = await Spice.get(
+      `/api/v1/connect-snippet?pair_code=${encodeURIComponent(pair.pair_code)}`);
+    Spice.state.connectTargets = snippet.targets;
 
     Spice.modal(`
-      <h3>⚡ เชื่อมการ์ดจอจาก Google Colab</h3>
-      <p class="small">ทำตาม 3 ขั้นตอนนี้ ใช้เวลาไม่ถึงหนึ่งนาที — หน้านี้จะรู้เองเมื่อเครื่องเข้าร่วมสำเร็จ</p>
+      <h3>⚡ เชื่อมเครื่องเข้าระบบ</h3>
+      <p class="small">เลือกว่าจะยืมการ์ดจอจากที่ไหน — หน้านี้จะรู้เองเมื่อเครื่องเข้าร่วมสำเร็จ</p>
 
       <div class="card" style="background:var(--brand-soft);border-color:rgba(255,138,61,0.25);margin-bottom:1.1rem">
-        <div class="row row--between">
+        <div class="row row--between row--wrap" style="gap:0.8rem">
           <div>
             <div class="tiny dim">รหัสจับคู่ของคุณ</div>
             <div class="mono" style="font-size:1.7rem;font-weight:700;letter-spacing:0.12em;color:var(--brand)">
@@ -181,16 +184,19 @@ Spice.connectFlow = async function () {
         </div>
       </div>
 
-      <ol class="small" style="padding-left:1.2rem;margin:0 0 0.8rem">
-        ${snippet.steps.map((step) => `<li style="margin-bottom:0.3rem">${Spice.esc(step)}</li>`).join("")}
-      </ol>
+      <div class="row row--wrap" style="gap:0.4rem;margin-bottom:1rem">
+        ${snippet.targets.map((target, index) => `
+          <button class="btn btn--sm ${index === 0 ? "btn--primary" : ""}"
+                  data-target="${target.id}" onclick="Spice.pickTarget('${target.id}')">
+            ${target.icon} ${Spice.esc(target.label)}
+          </button>`).join("")}
+      </div>
 
-      ${Spice.codeBlock(snippet.one_liner, "pair-cmd")}
+      <div id="target-panel"></div>
 
       <div class="row" style="gap:0.5rem;margin-top:1rem">
-        <a class="btn btn--sm" href="https://colab.research.google.com/#create=true" target="_blank" rel="noopener">
-          เปิด Google Colab ↗
-        </a>
+        <a class="btn btn--sm" id="target-link" href="https://colab.research.google.com/#create=true"
+           target="_blank" rel="noopener">เปิด Google Colab ↗</a>
         <span class="grow"></span>
         <span class="row tiny dim"><span class="spinner"></span> กำลังรอเครื่องเข้าร่วม…</span>
       </div>
@@ -205,11 +211,40 @@ Spice.connectFlow = async function () {
         <button class="btn btn--sm btn--ghost" onclick="Spice.connectFlow()">ขอรหัสใหม่</button>
         <button class="btn btn--sm" data-modal-close>ปิดหน้าต่าง</button>
       </div>`, {
-      onOpen: () => Spice.startCountdown(pair.expires_in),
+      onOpen: () => {
+        Spice.pickTarget(snippet.targets[0].id);
+        Spice.startCountdown(pair.expires_in);
+      },
     });
   } catch (error) {
     Spice.closeModal();
     Spice.toast(error.message, "error");
+  }
+};
+
+Spice.pickTarget = function (targetId) {
+  const target = (Spice.state.connectTargets || []).find((item) => item.id === targetId);
+  if (!target) return;
+
+  document.querySelectorAll("[data-target]").forEach((button) => {
+    button.classList.toggle("btn--primary", button.dataset.target === targetId);
+  });
+
+  document.getElementById("target-panel").innerHTML = `
+    <div class="tiny dim" style="margin-bottom:0.6rem">${Spice.esc(target.blurb)}</div>
+    <ol class="small" style="padding-left:1.2rem;margin:0 0 0.8rem">
+      ${target.steps.map((step) => `<li style="margin-bottom:0.3rem">${Spice.esc(step)}</li>`).join("")}
+    </ol>
+    ${Spice.codeBlock(target.command, `cmd-${target.id}`)}
+    ${target.note ? `<div class="tiny dim" style="margin-top:0.6rem">💡 ${Spice.esc(target.note)}</div>` : ""}`;
+
+  const link = document.getElementById("target-link");
+  if (target.id === "colab") {
+    link.href = "https://colab.research.google.com/#create=true";
+    link.textContent = "เปิด Google Colab ↗";
+    link.classList.remove("hidden");
+  } else {
+    link.classList.add("hidden");
   }
 };
 

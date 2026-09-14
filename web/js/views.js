@@ -906,6 +906,254 @@ Spice.deleteDoc = async function (docId) {
   Spice.searchVault();
 };
 
+
+/* ═══ คลังโมเดล (Hugging Face) ═════════════════════════════ */
+Spice.views.hub = async function () {
+  const [mine, presets] = await Promise.all([
+    Spice.get("/api/v1/hub/models"),
+    Spice.get("/api/v1/hub/presets"),
+  ]);
+  Spice.state.hubBudget = mine.vram_budget_mb;
+
+  return `
+    <div class="view-head">
+      <h2>📦 คลังโมเดล</h2>
+      <p class="small dim">
+        ดึงโมเดลไหนก็ได้จาก Hugging Face มาใช้ — ระบบจะประเมินให้ก่อนว่าการ์ดจอของคุณรันไหวไหม
+      </p>
+    </div>
+
+    <div class="card card--brain">
+      <div class="card-head">
+        <h3>🔎 ค้นหาบน Hugging Face</h3>
+        ${mine.vram_budget_mb
+          ? `<span class="pill pill--info">การ์ดที่มีตอนนี้ ${Spice.gb(mine.vram_budget_mb)}</span>`
+          : `<span class="pill pill--offline">ยังไม่มีเครื่องออนไลน์</span>`}
+      </div>
+
+      <div class="row row--wrap" style="gap:0.5rem;margin-bottom:0.9rem">
+        <input type="text" id="hub-q" class="grow" style="min-width:240px"
+               placeholder="เช่น abliterated, dolphin, typhoon, qwen coder…"
+               onkeydown="if(event.key==='Enter')Spice.hubSearch()">
+        <select id="hub-kind" style="width:auto">
+          <option value="">ทุกชนิด</option>
+          <option value="text">ข้อความ</option>
+          <option value="image">รูปภาพ</option>
+          <option value="audio">เสียง</option>
+          <option value="embedding">เวกเตอร์</option>
+        </select>
+        <button class="btn btn--primary" onclick="Spice.hubSearch()">ค้นหา</button>
+      </div>
+
+      <div class="row row--wrap" style="gap:0.35rem;margin-bottom:0.9rem">
+        <span class="tiny dim" style="align-self:center">ค้นบ่อย:</span>
+        ${["abliterated", "uncensored", "dolphin", "typhoon", "qwen coder", "sdxl"]
+          .map((term) => `<span class="tag" style="cursor:pointer"
+             onclick="document.getElementById('hub-q').value='${term}';Spice.hubSearch()">${term}</span>`).join("")}
+      </div>
+
+      <details>
+        <summary class="small muted" style="cursor:pointer">
+          หรือวางชื่อ/ลิงก์โมเดลตรง ๆ
+        </summary>
+        <div class="row row--wrap" style="gap:0.5rem;margin-top:0.7rem">
+          <input type="text" id="hub-repo" class="grow" style="min-width:260px"
+                 placeholder="owner/model-name หรือ https://huggingface.co/...">
+          <select id="hub-quant" style="width:auto">
+            <option value="">เลือกการบีบอัดให้อัตโนมัติ</option>
+            <option value="fp16">fp16 (เต็มความละเอียด)</option>
+            <option value="8bit">8bit (ประหยัดครึ่งหนึ่ง)</option>
+            <option value="4bit">4bit (เล็กที่สุด)</option>
+          </select>
+          <button class="btn" onclick="Spice.hubAdd(document.getElementById('hub-repo').value)">
+            เพิ่มเข้าคลัง
+          </button>
+        </div>
+      </details>
+
+      <div id="hub-results" style="margin-top:1rem"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>⭐ ชุดแนะนำ</h3>
+        <span class="tiny dim">กดเพิ่มได้ทันที ไม่ต้องค้นเอง</span>
+      </div>
+      <div class="stack" style="gap:1.2rem">
+        ${presets.groups.map((group) => `
+          <div>
+            <div style="font-weight:650;font-size:0.92rem">${Spice.esc(group.group)}</div>
+            <div class="tiny dim" style="margin-bottom:0.55rem">${Spice.esc(group.note)}</div>
+            <div class="grid grid--2" style="gap:0.5rem">
+              ${group.models.map((model) => `
+                <div class="model-card" style="cursor:default">
+                  <div class="row row--between" style="gap:0.5rem">
+                    <div class="model-card__name" style="font-size:0.86rem;word-break:break-all">
+                      ${Spice.esc(model.repo)}
+                    </div>
+                    ${model.already_added
+                      ? `<span class="pill pill--online" style="font-size:0.7rem">มีแล้ว</span>`
+                      : `<button class="btn btn--sm" onclick="Spice.hubAdd('${Spice.esc(model.repo)}')">+ เพิ่ม</button>`}
+                  </div>
+                  <div class="model-card__blurb" style="margin-bottom:0">${Spice.esc(model.why)}</div>
+                </div>`).join("")}
+            </div>
+          </div>`).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>🗂 โมเดลในคลังของคุณ</h3>
+        <span class="tiny dim">${mine.models.length} ตัว (นอกเหนือจาก ${mine.builtin.length} ตัวที่มีมาให้)</span>
+      </div>
+      ${mine.models.length
+        ? `<div class="stack" style="gap:0.6rem">${mine.models.map(Spice.renderCustomModel).join("")}</div>`
+        : Spice.empty("📦", "ยังไม่ได้เพิ่มโมเดลเอง", "ค้นหาด้านบน หรือกดเพิ่มจากชุดแนะนำ")}
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>🔑 โทเคน Hugging Face</h3>
+        ${mine.has_hf_token
+          ? `<span class="pill pill--online"><span class="dot"></span>ตั้งค่าแล้ว</span>`
+          : `<span class="pill pill--offline">ยังไม่ได้ตั้ง</span>`}
+      </div>
+      <p class="small">
+        จำเป็นเฉพาะกับโมเดลที่ต้องกดยอมรับเงื่อนไขก่อน (เช่นตระกูล Llama ของ Meta) หรือโมเดลส่วนตัวของคุณเอง
+        สร้างได้ที่ <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a>
+        (สิทธิ์ read ก็พอ)
+      </p>
+      <div class="row row--wrap" style="gap:0.5rem">
+        <input type="text" id="hf-token" class="grow" style="min-width:240px"
+               placeholder="hf_xxxxxxxxxxxxxxxxxxxx">
+        <button class="btn btn--primary" onclick="Spice.saveHfToken()">บันทึก</button>
+        ${mine.has_hf_token ? `<button class="btn btn--danger" onclick="Spice.saveHfToken(true)">ลบออก</button>` : ""}
+      </div>
+      <p class="tiny dim" style="margin:0.8rem 0 0">
+        เก็บแบบเข้ารหัสในฐานข้อมูล และจะถูกส่งให้เฉพาะเครื่องที่คุณจับคู่ไว้เท่านั้น เพื่อใช้ดาวน์โหลดโมเดล
+      </p>
+    </div>`;
+};
+
+Spice.renderCustomModel = function (model) {
+  return `
+    <div class="model-card" style="cursor:default">
+      <div class="row row--between row--wrap" style="gap:0.5rem">
+        <div style="min-width:0">
+          <div class="model-card__name">${Spice.esc(model.label)}</div>
+          <a class="tiny" href="${Spice.esc(model.url)}" target="_blank" rel="noopener"
+             style="word-break:break-all">${Spice.esc(model.repo)} ↗</a>
+        </div>
+        <div class="row" style="gap:0.4rem">
+          ${model.fits
+            ? `<span class="pill pill--online" style="font-size:0.7rem">รันได้บนเครื่องที่มี</span>`
+            : `<span class="pill pill--busy" style="font-size:0.7rem">VRAM อาจไม่พอ</span>`}
+          <button class="btn btn--sm btn--danger" onclick="Spice.hubRemove('${model.id}')">ลบ</button>
+        </div>
+      </div>
+      <div class="row row--wrap" style="gap:0.3rem;margin-top:0.5rem">
+        <span class="tag">${Spice.KIND_LABEL[model.kind] || model.kind}</span>
+        ${model.params_b ? `<span class="tag">${model.params_b}B พารามิเตอร์</span>` : ""}
+        <span class="tag">${Spice.esc(model.quantize)}</span>
+        <span class="tag">ต้องใช้ ~${Spice.gb(model.vram_mb)}</span>
+        ${model.trust_remote_code ? `<span class="pill pill--danger" style="font-size:0.7rem">⚠ trust_remote_code</span>` : ""}
+        ${model.gated ? `<span class="tag">ต้องขอสิทธิ์</span>` : ""}
+      </div>
+    </div>`;
+};
+
+Spice.hubSearch = async function () {
+  const query = document.getElementById("hub-q").value.trim();
+  const kind = document.getElementById("hub-kind").value;
+  const slot = document.getElementById("hub-results");
+  if (!query) return Spice.toast("ใส่คำค้นก่อน", "warn");
+
+  slot.innerHTML = Spice.skeleton(3);
+  try {
+    const data = await Spice.get(
+      `/api/v1/hub/search?q=${encodeURIComponent(query)}&kind=${kind}&limit=24`);
+    slot.innerHTML = data.results.length
+      ? `<div class="stack" style="gap:0.5rem">${data.results.map(Spice.renderHubResult).join("")}</div>`
+      : Spice.empty("🔎", "ไม่พบโมเดลที่ตรงกับคำค้น", "ลองคำอื่น หรือวางชื่อโมเดลตรง ๆ ด้านบน");
+  } catch (error) {
+    slot.innerHTML = Spice.empty("⚠️", "ค้นหาไม่สำเร็จ", Spice.esc(error.message));
+  }
+};
+
+Spice.renderHubResult = function (model) {
+  const number = (value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value;
+  return `
+    <div class="model-card" style="cursor:default">
+      <div class="row row--between row--wrap" style="gap:0.5rem">
+        <div style="min-width:0">
+          <div class="model-card__name" style="word-break:break-all">${Spice.esc(model.repo)}</div>
+          <div class="tiny dim">
+            ⬇ ${number(model.downloads)} · ♥ ${number(model.likes)}
+            ${model.params_b ? ` · ${model.params_b}B` : " · ไม่ทราบขนาด"}
+            · ${Spice.KIND_LABEL[model.kind] || model.kind}
+          </div>
+        </div>
+        ${model.unsupported
+          ? `<span class="pill pill--danger" style="font-size:0.7rem">ใช้กับระบบนี้ไม่ได้</span>`
+          : model.already_added
+            ? `<span class="pill pill--online" style="font-size:0.7rem">มีแล้ว</span>`
+            : `<button class="btn btn--sm btn--primary"
+                 onclick="Spice.hubAdd('${Spice.esc(model.repo)}')">+ เพิ่ม</button>`}
+      </div>
+
+      ${model.unsupported
+        ? `<div class="tiny" style="color:var(--warn);margin-top:0.4rem">${Spice.esc(model.unsupported)}</div>`
+        : `<div class="row row--wrap" style="gap:0.3rem;margin-top:0.5rem">
+             ${["fp16", "8bit", "4bit"].map((option) => {
+               const need = model.vram_by_quantize[option];
+               const ok = Spice.state.hubBudget && need && need <= Spice.state.hubBudget;
+               return `<span class="tag" style="${ok ? "color:var(--accent)" : ""}">
+                 ${option} ${need ? Spice.gb(need) : "?"}${ok ? " ✓" : ""}</span>`;
+             }).join("")}
+             ${model.gated ? `<span class="tag">ต้องขอสิทธิ์ก่อน</span>` : ""}
+             <a class="tag" href="${Spice.esc(model.url)}" target="_blank" rel="noopener">ดูบน HF ↗</a>
+           </div>`}
+    </div>`;
+};
+
+Spice.hubAdd = async function (repo) {
+  if (!repo || !repo.trim()) return Spice.toast("ใส่ชื่อโมเดลก่อน", "warn");
+  const quantize = (document.getElementById("hub-quant") || {}).value || "";
+  Spice.toast(`กำลังตรวจสอบ ${repo}…`, "info", 2500);
+  try {
+    const body = await Spice.post("/api/v1/hub/models", { repo: repo.trim(), quantize });
+    Spice.toast(`เพิ่ม ${body.model.label} เข้าคลังแล้ว`, "ok");
+    (body.warnings || []).forEach((warning) => Spice.toast(warning, "warn", 8000));
+    Spice.render();
+  } catch (error) {
+    Spice.toast(error.message, "error", 9000);
+  }
+};
+
+Spice.hubRemove = async function (modelId) {
+  try {
+    await Spice.del(`/api/v1/hub/models/${modelId}`);
+    Spice.toast("ลบออกจากคลังแล้ว", "ok");
+    Spice.render();
+  } catch (error) {
+    Spice.toast(error.message, "error");
+  }
+};
+
+Spice.saveHfToken = async function (clear = false) {
+  const field = document.getElementById("hf-token");
+  const token = clear ? "" : field.value.trim();
+  if (!clear && !token) return Spice.toast("วางโทเคนก่อน", "warn");
+  try {
+    await Spice.api("/api/v1/hub/token", { method: "PUT", body: { token } });
+    Spice.toast(clear ? "ลบโทเคนแล้ว" : "บันทึกโทเคนแล้ว", "ok");
+    Spice.render();
+  } catch (error) {
+    Spice.toast(error.message, "error");
+  }
+};
+
 /* ═══ ตั้งค่า ══════════════════════════════════════════════ */
 Spice.views.settings = async function () {
   const me = Spice.state.me;
