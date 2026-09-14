@@ -15,7 +15,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import api, earnings, sync
+from . import api, earnings, revenue, sync
 from .database import connect, init_db
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +47,13 @@ def _int(value, default):
         return default
 
 
+def _float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 ROUTES_GET = [
     (re.compile(r"^/api/overview$"), lambda q, m: api.overview(_int(_one(q, "days"), 90))),
     (re.compile(r"^/api/accounts$"), lambda q, m: api.accounts_board()),
@@ -56,6 +63,8 @@ ROUTES_GET = [
     (re.compile(r"^/api/payouts$"), lambda q, m: api.payouts_board(_int(_one(q, "limit"), 200))),
     (re.compile(r"^/api/goals$"), lambda q, m: api.goals_board()),
     (re.compile(r"^/api/alerts$"), lambda q, m: api.alerts_board()),
+    (re.compile(r"^/api/revenue$"),
+     lambda q, m: revenue.board(_float_or_none(_one(q, "target")))),
     (re.compile(r"^/api/intelligence$"),
      lambda q, m: api.intelligence(force=_one(q, "force") == "1")),
     (re.compile(r"^/api/connect$"), lambda q, m: sync.status()),

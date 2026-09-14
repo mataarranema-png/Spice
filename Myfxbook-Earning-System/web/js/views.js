@@ -859,6 +859,212 @@ const Views = (() => {
     return h(html);
   }
 
+
+  /* ======================================================= เครื่องหาเงิน */
+
+  const EFFORT_CHIP = {
+    'ทำได้ทันที': 'chip-ok',
+    'ต้องเจรจา': 'chip-warn',
+    'ต้องตกลงกับเจ้าของเงิน': 'chip-warn',
+    'แก้ได้เอง แต่ควรบอกเจ้าของเงิน': 'chip-info',
+    'ต้องตัดสินใจ': 'chip-crit',
+    'ควรทบทวน': 'chip-warn',
+  };
+
+  async function revenue(params) {
+    const qs = params.target ? '?target=' + encodeURIComponent(params.target) : '';
+    const d = await api.get('/api/revenue' + qs);
+    const cur = d.base_currency;
+    const opp = d.opportunities;
+    const rec = d.receivables;
+    const cap = d.capital;
+
+    /* ---- รายการโอกาส คือพระเอกของหน้านี้ ---- */
+    const oppHtml = opp.items.length
+      ? opp.items.map((o) => `<div class="opp">
+          <div class="opp-amount ${o.amount > 0 ? '' : 'is-none'}">
+            ${o.amount > 0 ? money(o.amount) : '-'}
+            ${o.amount > 0 ? `<span class="opp-unit">${esc(cur)}</span>` : ''}
+          </div>
+          <div class="opp-body">
+            <div class="opp-head">
+              <strong>${esc(o.title)}</strong>
+              <span class="chip ${EFFORT_CHIP[o.effort] || 'chip-mute'}">${esc(o.effort)}</span>
+            </div>
+            <p>${esc(o.detail)}</p>
+          </div>
+          <div class="opp-go"><a class="btn btn-sm btn-ghost" href="#${esc(o.route)}">ไปจัดการ</a></div>
+        </div>`).join('')
+      : emptyBox('ยังไม่พบเงินที่ตกหล่น', 'เก็บครบ เงื่อนไขเหมาะสม และทุกพอร์ตสร้างรายได้อยู่');
+
+    /* ---- เงินค้างเก็บแยกตามอายุ ---- */
+    const agingBars = rec.buckets.some((b) => b.total > 0)
+      ? Chart.hbars(rec.buckets.map((b) => ({
+          label: b.label, value: b.total, digits: 2, unit: ' ' + cur,
+          display: money(b.total) + ' · ' + b.count + ' รอบ',
+        })), { title: 'เงินค้างเก็บแยกตามอายุ', labelW: 96, valueW: 118 })
+      : emptyBox('ไม่มีเงินค้างเก็บ', 'เก็บครบทุกรอบแล้ว');
+
+    const recRows = rec.items.slice(0, 12).map((i) => `<tr>
+      <td><strong>${esc(i.name)}</strong></td>
+      <td>${esc(i.period_label)}</td>
+      <td class="t-right mono">${money(i.outstanding, i.currency)}</td>
+      <td class="t-right">
+        <span class="chip ${i.age_days > 90 ? 'chip-crit' : i.age_days > 30 ? 'chip-warn' : 'chip-mute'}">
+          ${num(i.age_days)} วัน</span>
+      </td>
+      <td class="t-right">
+        <button class="btn btn-sm btn-primary"
+          onclick="Actions.payFor(${i.account_id}, '${esc(i.period_key)}', ${i.outstanding.toFixed(2)}, '${esc(i.currency)}')">
+          บันทึกเก็บแล้ว</button>
+      </td>
+    </tr>`).join('');
+
+    /* ---- ประสิทธิภาพรายพอร์ต ---- */
+    const effRows = d.efficiency.map((e) => `<tr>
+      <td><strong>${esc(e.name)}</strong><div class="tiny muted">มีข้อมูล ${num(e.months, 1)} เดือน</div></td>
+      <td class="t-right mono">${money(e.balance_base)}</td>
+      <td class="t-right mono">${money(e.earned_base)}</td>
+      <td class="t-right mono">${e.per_month === null ? '-' : money(e.per_month)}</td>
+      <td class="t-right mono">${e.yield_per_1k === null ? '-' : num(e.yield_per_1k, 2)}</td>
+      <td class="t-right mono">${e.earn_per_risk === null ? '-'
+          : `<span class="${e.earn_per_risk < 1 ? 'money-down' : ''}">${num(e.earn_per_risk, 2)}</span>`}</td>
+      <td class="t-right">${ddChip(e.drawdown_pct)}</td>
+    </tr>`).join('');
+
+    /* ---- เปรียบเทียบรอบเก็บเงิน ---- */
+    const bill = d.billing;
+    const billBetter = bill.better === 'WEEK' ? 'รายสัปดาห์' : 'รายเดือน';
+    const billCurrent = bill.current_kind === 'WEEK' ? 'รายสัปดาห์' : 'รายเดือน';
+
+    const html = `<div class="page stack">
+      <div class="grid g-4">
+        ${stat({ label: 'เก็บได้ทันที ไม่ต้องเจรจา', value: money(opp.total_now), unit: cur,
+                 tone: opp.total_now > 0 ? 'ok' : 'info',
+                 note: 'เงินที่คิดส่วนแบ่งไว้แล้วและยังไม่ได้เก็บ' })}
+        ${stat({ label: 'ได้เพิ่มถ้าเจรจาสำเร็จ', value: money(opp.total_negotiable), unit: cur,
+                 tone: 'warn', note: 'ต้องคุยกับเจ้าของเงินก่อน ไม่ใช่เปลี่ยนเองได้' })}
+        ${stat({ label: 'รายได้ต่อเดือนตอนนี้',
+                 value: cap.enough ? money(cap.current_monthly) : '-', unit: cur, tone: 'accent',
+                 note: cap.enough ? `จากทุนที่บริหารอยู่ ${money(cap.current_capital)} ${esc(cur)}` : '' })}
+        ${stat({ label: 'ทุนที่ต้องเพิ่มเพื่อถึงเป้า',
+                 value: cap.enough && cap.capital_gap !== null
+                        ? (cap.capital_gap > 0 ? money(cap.capital_gap) : 'ถึงแล้ว') : '-',
+                 unit: cap.enough && cap.capital_gap > 0 ? cur : '',
+                 tone: cap.enough && cap.capital_gap > 0 ? 'warn' : 'ok',
+                 note: cap.enough ? `เป้า ${money(cap.target_monthly)} ${esc(cur)} ต่อเดือน` : '' })}
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div><h2>เงินที่ทิ้งไว้บนโต๊ะ</h2>
+          <p>เรียงตามจำนวนเงิน คิดจากข้อมูลจริงในระบบทั้งหมด ไม่ใช่การคาดเดา</p></div>
+        </div>
+        ${oppHtml}
+        <p class="alert-hint">อัตราส่วนแบ่งและรอบเก็บเงินเป็นเงื่อนไขในสัญญา
+          ตัวเลขในหน้านี้มีไว้ใช้เป็นข้อมูลประกอบการเจรจากับเจ้าของเงิน
+          การเปลี่ยนโดยไม่บอกเจ้าของเงินคือการผิดสัญญา</p>
+      </div>
+
+      <div class="grid g-2-1">
+        <div class="card">
+          <div class="card-head">
+            <div><h2>เงินค้างเก็บ</h2>
+            <p>รวม ${money(rec.total, cur)} · เกิน 30 วัน ${money(rec.overdue_total, cur)}
+               · ค้างนานสุด ${num(rec.oldest_days)} วัน</p></div>
+            <div class="card-tools"><a class="btn btn-sm btn-ghost" href="#/payouts">ไปหน้าจ่ายเงิน</a></div>
+          </div>
+          ${rec.items.length ? `<div class="table-wrap"><table>
+            <thead><tr><th>พอร์ต</th><th>รอบ</th><th class="t-right">ค้าง</th>
+            <th class="t-right">อายุหนี้</th><th></th></tr></thead>
+            <tbody>${recRows}</tbody>
+          </table></div>
+          ${rec.items.length > 12 ? `<p class="tiny muted">แสดง 12 รายการแรกจากทั้งหมด ${num(rec.items.length)} รายการ</p>` : ''}`
+          : emptyBox('ไม่มีเงินค้างเก็บ', 'เก็บครบทุกรอบแล้ว')}
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h2>อายุหนี้</h2><p>ยิ่งเก่ายิ่งเก็บยาก</p></div></div>
+          ${agingBars}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div><h2>พอร์ตไหนคุ้มที่จะทุ่มเวลาให้</h2>
+          <p>รายได้ต่อทุนหนึ่งพันหน่วยต่อเดือน และรายได้ต่อหนึ่งหน่วยความเสี่ยงที่ต้องแบก</p></div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>พอร์ต</th><th class="t-right">ทุน (${esc(cur)})</th><th class="t-right">รายได้สะสม</th>
+            <th class="t-right">ต่อเดือน</th><th class="t-right">ต่อทุน 1,000</th>
+            <th class="t-right">ต่อความเสี่ยง</th><th class="t-right">Drawdown</th>
+          </tr></thead>
+          <tbody>${effRows}</tbody>
+        </table></div>
+        <p class="tiny muted">คอลัมน์ต่อความเสี่ยงคือรายได้ต่อเดือนหารด้วยเปอร์เซ็นต์ขาดทุนสะสมที่ลึกที่สุด
+          ค่าต่ำแปลว่าได้เงินน้อยเมื่อเทียบกับความเสียหายที่เคยต้องรับ</p>
+      </div>
+
+      <div class="grid g-2">
+        <div class="card">
+          <div class="card-head">
+            <div><h2>อยากได้เท่านี้ต่อเดือน ต้องมีทุนเท่าไร</h2>
+            <p>คิดจากผลงานจริงของพอร์ตที่มีอยู่ ไม่ใช่ตัวเลขในฝัน</p></div>
+          </div>
+          ${cap.enough ? `
+          <div class="form-grid">
+            <label class="field"><span>อยากได้ต่อเดือน (${esc(cur)})</span>
+              <input id="capTarget" type="number" step="100" min="0" value="${cap.target_monthly}"></label>
+            <div class="field"><span>&nbsp;</span>
+              <button class="btn btn-primary" onclick="Actions.planCapital()">คำนวณ</button></div>
+          </div>
+          <div class="kv-list" style="margin-top:12px">
+            <div class="kv"><span>ตามผลงานค่ากลาง</span><strong>${money(cap.capital_median, cur)}</strong></div>
+            <div class="kv"><span>ถ้าผลงานเท่าพอร์ตที่ดีที่สุด</span><strong>${money(cap.capital_optimistic, cur)}</strong></div>
+            <div class="kv"><span>ถ้าผลงานเท่าพอร์ตที่แย่ที่สุด</span><strong>${money(cap.capital_pessimistic, cur)}</strong></div>
+            <div class="kv"><span>ทุนที่บริหารอยู่ตอนนี้</span><strong>${money(cap.current_capital, cur)}</strong></div>
+            <div class="kv"><span>ต้องระดมเพิ่ม</span><strong>${cap.capital_gap > 0
+                ? `<span class="money-down">${money(cap.capital_gap, cur)}</span>`
+                : '<span class="money-up">ถึงแล้ว</span>'}</strong></div>
+          </div>
+          <p class="tiny muted">ฐานคิด: พอร์ตที่มีอยู่สร้างรายได้ส่วนแบ่งเฉลี่ย
+            ${num(cap.median_yield_per_1k, 2)} ${esc(cur)} ต่อทุน 1,000 ${esc(cur)} ต่อเดือน
+            จาก ${num(cap.accounts_n)} พอร์ต ตัวเลขนี้ไม่ใช่การรับประกัน
+            ผลงานในอดีตไม่ได้บอกว่าอนาคตจะเป็นแบบเดียวกัน</p>
+          ` : emptyBox('ข้อมูลยังไม่พอวางแผน', 'ต้องมีพอร์ตที่เคยสร้างรายได้อย่างน้อยหนึ่งพอร์ต')}
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div><h2>รอบเก็บเงินและความเป็นธรรม</h2><p>ผลย้อนหลังจริงจากข้อมูลทั้งหมดที่มี</p></div>
+          </div>
+          <div class="kv-list">
+            <div class="kv"><span>เก็บรายเดือน</span><strong>${money(bill.monthly, cur)}</strong></div>
+            <div class="kv"><span>เก็บรายสัปดาห์</span><strong>${money(bill.weekly, cur)}</strong></div>
+            <div class="kv"><span>ตอนนี้ใช้รอบ</span><strong>${billCurrent}</strong></div>
+            <div class="kv"><span>รอบที่ให้มากกว่า</span><strong>${billBetter}</strong></div>
+          </div>
+          ${bill.gain > 0
+            ? `<p class="alert-hint">เปลี่ยนเป็นรอบ${billBetter}จะเก็บได้เพิ่ม ${money(bill.gain, cur)}
+               จากข้อมูลย้อนหลัง แต่เป็นเงื่อนไขในสัญญาที่ต้องตกลงกับเจ้าของเงินก่อน</p>`
+            : `<p class="alert-hint">รอบที่ใช้อยู่ให้ผลดีที่สุดแล้วสำหรับข้อมูลชุดนี้ ไม่ต้องเปลี่ยน</p>`}
+
+          <div class="fair-box">
+            <p class="section-label">ต้นทุนของความเป็นธรรม</p>
+            <p class="tiny">การใช้ High-Water Mark ทำให้เก็บได้น้อยลง
+              <strong class="money-down">${money(d.drag.hwm_cost, cur)}</strong>
+              เมื่อเทียบกับการคิดส่วนแบ่งทุกรอบที่มีกำไร</p>
+            <p class="tiny muted">นี่ไม่ใช่เงินที่หายไป แต่คือเงินที่เจ้าของพอร์ตไม่ต้องจ่ายซ้ำสำหรับกำไรก้อนเดิม
+              ใช้เป็นจุดขายตอนเสนองานได้ เพราะผู้จัดการพอร์ตจำนวนมากไม่ให้ข้อนี้</p>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+    return h(html);
+  }
+
   /* =============================================================== แจ้งเตือน */
 
   async function alerts() {
@@ -896,5 +1102,5 @@ const Views = (() => {
     return h(html);
   }
 
-  return { overview, accounts, accountDetail, earnings, payouts, goals, connect, alerts, intel };
+  return { overview, accounts, accountDetail, earnings, payouts, goals, connect, alerts, intel, revenue };
 })();

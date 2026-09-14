@@ -75,39 +75,29 @@ def shift_period(key, steps):
 
 # --------------------------------------------------------------- คิดส่วนแบ่ง
 
-def recompute_account(conn, account_id, kind=MONTH):
-    """
-    คิดส่วนแบ่งใหม่ทั้งเส้นเวลาของพอร์ตหนึ่ง
-    ต้องคิดใหม่ทั้งเส้นเสมอ เพราะ High-Water Mark ของรอบหลังขึ้นกับรอบก่อนหน้า
-    """
-    account = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
-    if account is None:
-        return []
-    rule = conn.execute("SELECT * FROM rules WHERE account_id = ?", (account_id,)).fetchone()
-
-    share_pct = float(rule["share_pct"]) if rule else 0.0
-    use_hwm = bool(rule["use_hwm"]) if rule else True
-    min_profit = float(rule["min_profit"]) if rule else 0.0
-    fixed_fee = float(rule["fixed_fee"]) if rule else 0.0
-    active = bool(rule["active"]) if rule else False
-
-    rows = conn.execute(
-        "SELECT day, profit FROM daily WHERE account_id = ? ORDER BY day", (account_id,)
-    ).fetchall()
-
+def bucket_by_period(rows, kind=MONTH):
+    """รวมกำไรรายวันเป็นก้อนตามรอบ คืน dict ของ คีย์รอบ -> กำไรรวมในรอบ"""
     buckets = {}
     for row in rows:
         key = period_key(row["day"], kind)
         if not key:
             continue
         buckets[key] = buckets.get(key, 0.0) + float(row["profit"] or 0.0)
+    return buckets
 
-    conn.execute("DELETE FROM accruals WHERE account_id = ?", (account_id,))
 
-    stamp = now_iso()
+def simulate(rows, kind=MONTH, share_pct=0.0, use_hwm=True,
+             min_profit=0.0, fixed_fee=0.0, active=True):
+    """
+    แกนกลางของการคิดส่วนแบ่ง เป็นฟังก์ชันบริสุทธิ์ ไม่แตะฐานข้อมูล
+
+    ทั้งการคิดเงินจริงและการทดลองว่า "ถ้าเปลี่ยนเงื่อนไขแล้วจะได้เท่าไร"
+    ต่างเรียกฟังก์ชันนี้ตัวเดียวกัน ตัวเลขที่เอาไปคุยกับลูกค้าจึงตรงกับที่เก็บจริงเสมอ
+    """
+    buckets = bucket_by_period(rows, kind)
     cum = 0.0
     hwm = 0.0
-    result = []
+    out = []
     for key in sorted(buckets):
         gross = round(buckets[key], 2)
         cum_end = round(cum + gross, 2)
@@ -125,21 +115,62 @@ def recompute_account(conn, account_id, kind=MONTH):
 
         hwm_after = round(max(hwm_before, cum_end), 2)
         start_day, end_day = period_bounds(key)
+        out.append({
+            "period_key": key, "start_day": start_day, "end_day": end_day,
+            "gross": gross, "base": base,
+            "hwm_before": hwm_before, "hwm_after": hwm_after,
+            "share_pct": share_pct, "earning": earning,
+        })
+        cum = cum_end
+        hwm = hwm_after
+    return out
+
+
+def rule_of(conn, account_id):
+    """อ่านเงื่อนไขส่วนแบ่งของพอร์ตออกมาเป็น dict ที่ simulate ใช้ได้ทันที"""
+    row = conn.execute("SELECT * FROM rules WHERE account_id = ?", (account_id,)).fetchone()
+    if row is None:
+        return {"share_pct": 0.0, "use_hwm": True, "min_profit": 0.0,
+                "fixed_fee": 0.0, "active": False}
+    return {
+        "share_pct": float(row["share_pct"]),
+        "use_hwm": bool(row["use_hwm"]),
+        "min_profit": float(row["min_profit"]),
+        "fixed_fee": float(row["fixed_fee"]),
+        "active": bool(row["active"]),
+    }
+
+
+def daily_rows(conn, account_id):
+    return conn.execute(
+        "SELECT day, profit FROM daily WHERE account_id = ? ORDER BY day", (account_id,)
+    ).fetchall()
+
+
+def recompute_account(conn, account_id, kind=MONTH):
+    """
+    คิดส่วนแบ่งใหม่ทั้งเส้นเวลาของพอร์ตหนึ่งแล้วบันทึกลงตาราง accruals
+    ต้องคิดใหม่ทั้งเส้นเสมอ เพราะ High-Water Mark ของรอบหลังขึ้นกับรอบก่อนหน้า
+    """
+    account = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if account is None:
+        return []
+
+    periods = simulate(daily_rows(conn, account_id), kind, **rule_of(conn, account_id))
+
+    conn.execute("DELETE FROM accruals WHERE account_id = ?", (account_id,))
+    stamp = now_iso()
+    for p in periods:
         conn.execute(
             """INSERT INTO accruals
                (account_id, period_key, start_day, end_day, gross, base,
                 hwm_before, hwm_after, share_pct, earning, currency, computed_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (account_id, key, start_day, end_day, gross, base, hwm_before, hwm_after,
-             share_pct, earning, account["currency"], stamp),
+            (account_id, p["period_key"], p["start_day"], p["end_day"], p["gross"], p["base"],
+             p["hwm_before"], p["hwm_after"], p["share_pct"], p["earning"],
+             account["currency"], stamp),
         )
-        result.append({
-            "period_key": key, "gross": gross, "base": base,
-            "hwm_before": hwm_before, "hwm_after": hwm_after, "earning": earning,
-        })
-        cum = cum_end
-        hwm = hwm_after
-    return result
+    return periods
 
 
 def recompute_all(conn, kind=None):

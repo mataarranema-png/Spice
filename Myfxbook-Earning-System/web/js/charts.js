@@ -147,16 +147,22 @@ const Chart = (() => {
     const rowH = opts.rowH || 34;
     const H = Math.max(rowH, items.length * rowH) + 8;
     const labelW = opts.labelW || 118;
-    const valueW = 66;
+    const valueW = opts.valueW || 66;   // ต้องกว้างขึ้นเมื่อค่าที่แสดงยาวกว่าตัวเลขเปล่า
     const iw = W - labelW - valueW - 12;
     const max = Math.max(...items.map((i) => i.value), opts.max || 0, 1);
+    // ป้ายที่ยาวเกินช่องจะไปทับแท่ง จึงตัดให้พอดีและเก็บข้อความเต็มไว้ใน tooltip
+    const maxChars = Math.max(6, Math.floor(labelW / 7.2));
+    const fit = (text) => {
+      const t = String(text === null || text === undefined ? '' : text);
+      return t.length > maxChars ? t.slice(0, maxChars - 1) + '…' : t;
+    };
 
     const rows = items.map((it, i) => {
       const w = Math.max(2, (it.value / max) * iw);
       const y = i * rowH + 6;
       const color = it.color || V.accent;
       return `<g>
-        <text class="axis-text" x="0" y="${y + 14}" style="fill:var(--text-2);font-size:11.5px">${esc(it.label)}</text>
+        <text class="axis-text" x="0" y="${y + 14}" style="fill:var(--text-2);font-size:11.5px">${esc(fit(it.label))}<title>${esc(it.label)}</title></text>
         <rect x="${labelW}" y="${y + 4}" width="${iw}" height="13" rx="6.5" fill="var(--panel-2)"/>
         <rect class="hbar" x="${labelW}" y="${y + 4}" width="${w.toFixed(1)}" height="13" rx="6.5" fill="${color}" style="animation-delay:${i * 45}ms">
           <title>${esc(it.label)} ${MFE.num(it.value, it.digits || 0)}${esc(it.unit || '')}</title></rect>
