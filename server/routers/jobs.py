@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, brain, catalog, db, events, pipeline, scheduler, vault
+from .. import auth, brain, cache, catalog, db, events, pipeline, scheduler, vault
 from .workers import ONLINE_WINDOW, worker_public
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
@@ -58,6 +58,10 @@ def job_public(row, include_result: bool = True) -> dict:
         "error": row["error"],
         "attempt": row["attempt"],
         "parent_id": row["parent_id"],
+        "thread_id": row["thread_id"],
+        "batch_id": row["batch_id"],
+        "from_cache": bool(row["from_cache"]),
+        "repairs": db.loads(row["repairs"], []),
         "eta_seconds": row["eta_seconds"],
         "chain_left": len(db.loads(row["chain"], [])),
     }
@@ -221,14 +225,22 @@ def submit_job(body: JobRequest, user: dict = Depends(auth.require_user)) -> dic
          "title": first.get("title", ""), "steps": len(steps)},
     )
 
+    created = db.query_one(
+        "SELECT status, from_cache FROM jobs WHERE id = ?", (job_id,)
+    )
+    cached = bool(created["from_cache"])
+
     # ไม่มีเครื่องเลย = บอกวิธีแก้ที่ทำได้จริงก่อน ค่อยว่ากันเรื่องเครื่องไม่พอทีหลัง
-    if not capacity["online"]:
+    if cached:
+        hint = ""          # ตอบไปแล้ว ไม่ต้องเตือนเรื่องเครื่อง
+    elif not capacity["online"]:
         hint = "ยังไม่มีเครื่องออนไลน์ — เปิดโน้ตบุ๊ก Colab แล้วเชื่อมเครื่องก่อน"
     else:
         hint = scheduler.blocked_reason(user["id"], first["model"], first["kind"])
     return {
         "job_id": job_id,
-        "status": "queued",
+        "status": created["status"],
+        "from_cache": cached,
         "model": first["model"],
         "steps": len(steps),
         "auto": auto,
@@ -362,6 +374,7 @@ def stats(user: dict = Depends(auth.require_user)) -> dict:
         "vault_docs": db.query_one(
             "SELECT COUNT(*) AS n FROM vault_docs WHERE user_id=?", (uid,)
         )["n"],
+        "cache": cache.stats_for(uid),
         "workers_online": db.query_one(
             "SELECT COUNT(*) AS n FROM workers WHERE user_id=? AND last_seen_at > ?",
             (uid, now - ONLINE_WINDOW),

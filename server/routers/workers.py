@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import auth, brain, catalog, db, events, pipeline, scheduler
+from .. import auth, brain, cache, catalog, db, events, pipeline, scheduler
 from ..security import hash_token, new_pair_code, new_worker_token
 
 router = APIRouter(prefix="/api/v1", tags=["workers"])
@@ -48,6 +48,11 @@ class ProgressRequest(BaseModel):
     progress: float = 0
     message: str = ""
     level: str = "info"
+
+
+class StreamRequest(BaseModel):
+    delta: str = Field(default="", max_length=20_000)
+    progress: float = 0
 
 
 class CompleteRequest(BaseModel):
@@ -241,7 +246,14 @@ def heartbeat(body: HeartbeatRequest, worker: dict = Depends(authed_worker)) -> 
         "SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND status = 'queued'",
         (worker["user_id"],),
     )["n"]
-    return {"ok": True, "queued_jobs": pending, "server_time": now}
+    response = {"ok": True, "queued_jobs": pending, "server_time": now}
+
+    # ว่างอยู่และไม่มีงานค้าง — ใช้เวลาว่างโหลดโมเดลที่น่าจะได้ใช้ต่อไปรอไว้
+    if body.status == "idle" and not pending:
+        preload = scheduler.suggest_preload(dict(fresh))
+        if preload:
+            response["preload"] = preload
+    return response
 
 
 @router.post("/worker/lease")
@@ -310,6 +322,35 @@ def report_progress(
     return {"ok": True}
 
 
+@router.post("/worker/jobs/{job_id}/stream")
+def stream_tokens(
+    job_id: str, body: StreamRequest, worker: dict = Depends(authed_worker)
+) -> dict:
+    """รับคำตอบทีละท่อนระหว่างที่โมเดลกำลังพิมพ์ แล้วส่งต่อขึ้นหน้าเว็บทันที.
+
+    เก็บลงคอลัมน์ result ไปเรื่อย ๆ ด้วย เผื่อผู้ใช้รีเฟรชหน้ากลางคัน
+    จะได้เห็นส่วนที่พิมพ์มาแล้ว ไม่ใช่หน้าว่าง.
+    """
+    row = db.query_one(
+        "SELECT id, progress FROM jobs WHERE id = ? AND worker_id = ?", (job_id, worker["id"])
+    )
+    if row is None:
+        raise HTTPException(404, "ไม่พบงานนี้ หรือไม่ได้ถูกมอบหมายให้เครื่องนี้")
+    if not body.delta:
+        return {"ok": True}
+
+    progress = max(row["progress"], min(0.99, float(body.progress or 0)))
+    db.execute(
+        "UPDATE jobs SET result = result || ?, progress = ?, progress_at = ? WHERE id = ?",
+        (body.delta, progress, time.time(), job_id),
+    )
+    events.publish(
+        worker["user_id"], "job",
+        {"action": "token", "job_id": job_id, "delta": body.delta, "progress": progress},
+    )
+    return {"ok": True}
+
+
 @router.post("/worker/jobs/{job_id}/complete")
 def complete_job(
     job_id: str, body: CompleteRequest, worker: dict = Depends(authed_worker)
@@ -354,18 +395,36 @@ def complete_job(
         )
         return {"ok": True, "status": "failed"}
 
-    # ── สำเร็จ ────────────────────────────────────────────────
+    # เครื่องที่สตรีมมาแล้วส่ง result ว่างมาตอนจบได้ ให้ใช้ของที่สะสมไว้แทน
+    final_result = body.result or row["result"]
+
+    # ── ด่านตรวจคุณภาพ: "เสร็จ" ไม่ได้แปลว่า "ใช้ได้" ───────────
+    verdict = pipeline.maybe_repair(row, final_result, body.meta)
+    if verdict is not None:
+        return {"ok": True, "status": "repairing", "problem": verdict.problem}
+
+    # ── สำเร็จจริง ────────────────────────────────────────────
     db.execute(
         """UPDATE jobs SET status='done', result=?, error='', progress=1.0, finished_at=?
            WHERE id=?""",
-        (body.result, now, job_id),
+        (final_result, now, job_id),
     )
     db.execute(
         "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
         (job_id, now, "success", "ทำงานเสร็จสมบูรณ์"),
     )
 
+    payload = db.loads(row["payload"], {})
+    duration = now - (row["started_at"] or now)
+    if cache.is_cacheable(payload, row["kind"]):
+        cache.store(worker["user_id"], cache.fingerprint(row["model"], payload),
+                    row["model"], payload, final_result, duration)
+
     fresh = db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    if fresh["thread_id"]:
+        from .threads import append_reply
+
+        append_reply(fresh)
     next_job_id = pipeline.advance_chain(fresh)
 
     events.publish(

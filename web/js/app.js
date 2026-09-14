@@ -3,6 +3,7 @@
 const ROUTES = {
   overview: { title: "ภาพรวม",              crumb: "สรุปสถานะระบบทั้งหมด" },
   studio:   { title: "สั่งงาน AI",           crumb: "เลือกโมเดลแล้วส่งงานเข้าคิว" },
+  chat:     { title: "แชท",                  crumb: "คุยต่อเนื่องโดยโมเดลจำบริบทเดิมได้" },
   jobs:     { title: "งานทั้งหมด",           crumb: "ประวัติและผลลัพธ์ของทุกงาน" },
   gpu:      { title: "เครื่อง GPU",          crumb: "การ์ดจอที่ยืมมาและสถานะสด" },
   drive:    { title: "Drive & rclone",      crumb: "เชื่อม Google Drive เข้ากับเครื่องที่ยืมมา" },
@@ -60,6 +61,9 @@ Spice.afterRender = function (route) {
   if (route === "drive" && document.getElementById("drive-files")) {
     Spice.browseDrive();
   }
+  if (route === "chat" && Spice.state.activeThread) {
+    Spice.openThread(Spice.state.activeThread);
+  }
   Spice.updateBadges();
 };
 
@@ -92,6 +96,19 @@ Spice.connectStream = function () {
     pill.innerHTML = `<span class="dot dot--pulse"></span> อัปเดตสด`;
   });
 
+  source.addEventListener("batch", () => {
+    if (["overview", "jobs"].includes(Spice.state.route)) Spice.refresh();
+  });
+
+  source.addEventListener("thread", (event) => {
+    const data = JSON.parse(event.data);
+    if (Spice.state.route === "chat" && Spice.state.activeThread === data.thread_id) {
+      Spice.state.pendingJob = null;
+      Spice.state.liveText = "";
+      Spice.openThread(data.thread_id);
+    }
+  });
+
   source.addEventListener("worker", (event) => {
     const data = JSON.parse(event.data);
     if (data.action === "joined") {
@@ -108,6 +125,27 @@ Spice.connectStream = function () {
   source.addEventListener("job", (event) => {
     const data = JSON.parse(event.data);
 
+    // คำตอบไหลมาทีละท่อน — ต่อเข้าฟองแชทหรือกล่องผลลัพธ์ทันที
+    if (data.action === "token") {
+      if (Spice.state.route === "chat" && Spice.state.pendingJob === data.job_id) {
+        Spice.state.liveText = (Spice.state.liveText || "") + data.delta;
+        Spice.showLiveBubble(Spice.state.liveText);
+      } else if (Spice.state.route === "studio" && Spice.state.watchJob === data.job_id) {
+        const box = document.querySelector("#live-job .result");
+        if (box) {
+          box.textContent += data.delta;
+          box.scrollTop = box.scrollHeight;
+        } else {
+          Spice.renderLiveJob(data.job_id);
+        }
+      }
+      return;         // สตรีมมาถี่มาก อย่าไปวาดหน้าใหม่ทั้งหน้า
+    }
+
+    if (data.action === "repaired") {
+      Spice.toast(data.message, "warn", 8000);
+    }
+
     if (data.action === "chained") {
       Spice.toast(`ขั้นที่ ${data.step}/${data.total} เริ่มแล้ว: ${data.title}`, "info");
       // ลูกโซ่เดินต่อ — ให้หน้าจอตามไปดูงานขั้นถัดไปแทน
@@ -117,10 +155,20 @@ Spice.connectStream = function () {
       Spice.toast(data.message, "warn", 7000);
     }
     if (data.action === "finished") {
-      Spice.toast(
-        data.status === "done" ? `งานเสร็จแล้ว (${Spice.duration(data.duration)})` : "งานล้มเหลว — เปิดดูบันทึกได้",
-        data.status === "done" ? "ok" : "error"
-      );
+      if (data.from_cache) {
+        Spice.toast("ตอบจากผลลัพธ์ที่เคยคำนวณไว้ — ไม่ได้ใช้ GPU", "ok");
+      } else {
+        Spice.toast(
+          data.status === "done" ? `งานเสร็จแล้ว (${Spice.duration(data.duration)})` : "งานล้มเหลว — เปิดดูบันทึกได้",
+          data.status === "done" ? "ok" : "error"
+        );
+      }
+      if (Spice.state.route === "chat" && Spice.state.pendingJob === data.job_id) {
+        Spice.state.pendingJob = null;
+        Spice.state.liveText = "";
+        Spice.openThread(Spice.state.activeThread);
+        return;
+      }
     }
     if (Spice.state.watchJob && data.job_id === Spice.state.watchJob && Spice.state.route === "studio") {
       Spice.renderLiveJob(Spice.state.watchJob);

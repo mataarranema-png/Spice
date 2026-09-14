@@ -104,6 +104,12 @@ Spice.views.overview = async function () {
               <span class="small muted">เอกสารในคลังความรู้</span>
               <strong>${stats.vault_docs}</strong>
             </div>
+            <div class="row row--between">
+              <span class="small muted">ตอบจากแคช (ไม่ใช้ GPU)</span>
+              <strong>${stats.cache?.hits || 0} ครั้ง</strong>
+            </div>
+            ${stats.cache?.saved_seconds ? `
+              <div class="tiny dim">ประหยัดเวลาการ์ดจอไปแล้วราว ${Spice.duration(stats.cache.saved_seconds)}</div>` : ""}
           </div>
         </div>
       </div>
@@ -272,6 +278,32 @@ Spice.views.studio = async function () {
 
     <div id="plan-slot"></div>
     <div id="live-job"></div>
+
+    <details class="card">
+      <summary class="row row--between" style="cursor:pointer;user-select:none;list-style:none">
+        <span><strong>🗂 งานชุด</strong>
+          <span class="tiny dim">— สั่งครั้งเดียว ทำหลายรายการพร้อมกันทุกเครื่อง</span></span>
+      </summary>
+      <div style="padding-top:1.1rem">
+        <label class="field">
+          <span>คำสั่ง — ใส่ <code>{{item}}</code> ตรงที่จะให้แทนแต่ละรายการ</span>
+          <textarea id="b-prompt" rows="2"
+            placeholder="สรุปหัวข้อนี้เป็น 3 ข้อ: {{item}}"></textarea>
+        </label>
+        <label class="field">
+          <span>รายการ (บรรทัดละหนึ่งอย่าง)</span>
+          <textarea id="b-items" rows="4" placeholder="เศรษฐกิจไทย&#10;พลังงานสะอาด&#10;การศึกษา"></textarea>
+        </label>
+        <div class="row row--between row--wrap" style="gap:0.6rem">
+          <label class="row" style="gap:0.4rem;font-size:0.85rem;color:var(--text-soft)">
+            <input type="checkbox" id="b-drive" style="width:auto">
+            แต่ละบรรทัดเป็นไฟล์ใน Drive
+          </label>
+          <button class="btn btn--primary" onclick="Spice.submitBatch()">ส่งทั้งชุด</button>
+        </div>
+        <div id="batch-slot" style="margin-top:1rem"></div>
+      </div>
+    </details>
 
     <details class="card" id="manual-box" ${Spice.state.selectedModel === "auto" ? "" : "open"}>
       <summary class="row row--between" style="cursor:pointer;user-select:none;list-style:none">
@@ -590,6 +622,7 @@ Spice.renderJobList = function (jobs) {
         <span class="pill ${status.pill}" style="min-width:86px;justify-content:center">
           <span class="dot ${pending ? "dot--pulse" : ""}"></span>${status.label}
         </span>
+        ${job.from_cache ? `<span class="tag" title="ตอบจากผลลัพธ์เดิม ไม่ได้ใช้ GPU">⚡ แคช</span>` : ""}
         <div class="job__body">
           <div class="job__title">${Spice.esc(job.title)}</div>
           <div class="job__meta">
@@ -599,6 +632,7 @@ Spice.renderJobList = function (jobs) {
             ${job.chain_left ? ` · เหลืออีก ${job.chain_left} ขั้น` : ""}
             ${job.parent_id ? " · ต่อจากงานก่อนหน้า" : ""}
             ${job.attempt > 1 ? ` · ลองใหม่ครั้งที่ ${job.attempt}` : ""}
+            ${(job.repairs || []).length ? ` · ซ่อมผลลัพธ์ ${job.repairs.length} ครั้ง` : ""}
           </div>
           ${job.status === "running"
             ? `<div class="bar" style="margin-top:0.4rem"><i style="width:${Math.round(job.progress * 100)}%"></i></div>`
@@ -652,6 +686,17 @@ Spice.openJob = async function (jobId) {
       <div class="notice" style="margin-bottom:1rem">
         🔁 งานนี้ล้มเพราะหน่วยความจำ GPU ไม่พอ ระบบจึงลดขนาดโมเดลแล้วลองใหม่ให้อัตโนมัติ
         (ครั้งที่ ${job.attempt})
+      </div>` : ""}
+
+    ${(job.repairs || []).length ? `
+      <div class="notice" style="margin-bottom:1rem">
+        <strong>🩹 ด่านตรวจคุณภาพสั่งทำใหม่ ${job.repairs.length} ครั้ง</strong>
+        ${job.repairs.map((repair) => `<div>• ${Spice.esc(repair.detail)}</div>`).join("")}
+      </div>` : ""}
+
+    ${job.from_cache ? `
+      <div class="notice" style="margin-bottom:1rem">
+        ⚡ คำตอบนี้มาจากผลลัพธ์ที่เคยคำนวณไว้แล้ว — ไม่ได้ใช้การ์ดจอเลย
       </div>` : ""}
 
     ${job.payload?.prompt ? `
@@ -1154,6 +1199,169 @@ Spice.saveHfToken = async function (clear = false) {
   }
 };
 
+
+/* ═══ แชท (บทสนทนาต่อเนื่อง) ════════════════════════════════ */
+Spice.views.chat = async function () {
+  const [list, models] = await Promise.all([
+    Spice.get("/api/v1/threads"),
+    Spice.get("/api/v1/models"),
+  ]);
+  Spice.state.threads = list.threads;
+  Spice.state.models = models.models;
+
+  const active = Spice.state.activeThread &&
+    list.threads.find((thread) => thread.id === Spice.state.activeThread)
+      ? Spice.state.activeThread : (list.threads[0]?.id || null);
+  Spice.state.activeThread = active;
+
+  return `
+    <div class="chat-shell">
+      <aside class="chat-list card card--flush">
+        <div class="row row--between" style="padding:0.9rem 1rem;border-bottom:1px solid var(--border)">
+          <strong class="small">บทสนทนา</strong>
+          <button class="btn btn--sm btn--primary" onclick="Spice.newThread()">+ ใหม่</button>
+        </div>
+        <div id="thread-list">
+          ${list.threads.length
+            ? list.threads.map((thread) => `
+                <div class="thread-row ${thread.id === active ? "active" : ""}"
+                     onclick="Spice.openThread('${thread.id}')">
+                  <div class="small" style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                    ${Spice.esc(thread.title)}
+                  </div>
+                  <div class="tiny dim" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                    ${thread.turns} ข้อความ · ${Spice.ago(thread.updated_at)}
+                  </div>
+                </div>`).join("")
+            : `<div class="empty" style="padding:1.6rem 1rem">
+                 <div class="empty__icon">💬</div>
+                 <div class="small dim">ยังไม่มีบทสนทนา</div>
+               </div>`}
+        </div>
+      </aside>
+
+      <section class="chat-main card card--flush" id="chat-main">
+        ${active ? Spice.skeleton(3) : `
+          <div class="empty" style="margin:auto">
+            <div class="empty__icon">💬</div>
+            <div class="empty__title">เริ่มบทสนทนาใหม่</div>
+            <div class="small">คุยต่อเนื่องได้หลายรอบ โมเดลจะจำเรื่องที่คุยไปแล้ว</div>
+            <button class="btn btn--primary" style="margin-top:1rem" onclick="Spice.newThread()">
+              + เริ่มคุย
+            </button>
+          </div>`}
+      </section>
+    </div>`;
+};
+
+Spice.newThread = async function () {
+  const body = await Spice.post("/api/v1/threads", { model: "auto" });
+  Spice.state.activeThread = body.id;
+  await Spice.render();
+};
+
+Spice.openThread = async function (threadId) {
+  Spice.state.activeThread = threadId;
+  document.querySelectorAll(".thread-row").forEach((row) => row.classList.remove("active"));
+  const slot = document.getElementById("chat-main");
+  if (!slot) return Spice.render();
+  slot.innerHTML = Spice.skeleton(3);
+
+  const data = await Spice.get(`/api/v1/threads/${threadId}`);
+  Spice.state.pendingJob = data.pending?.id || null;
+
+  slot.innerHTML = `
+    <div class="row row--between" style="padding:0.85rem 1.1rem;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div class="small" style="font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${Spice.esc(data.thread.title)}
+        </div>
+        <div class="tiny dim">
+          ${data.thread.model === "auto" ? "เลือกโมเดลอัตโนมัติทุกข้อความ" : Spice.esc(data.thread.model)}
+          ${data.thread.use_vault ? " · ใช้คลังความรู้" : ""}
+        </div>
+      </div>
+      <button class="btn btn--sm btn--danger" onclick="Spice.deleteThread('${threadId}')">ลบ</button>
+    </div>
+
+    <div class="chat-scroll" id="chat-scroll">
+      ${data.messages.map(Spice.renderBubble).join("")}
+      <div id="chat-live"></div>
+    </div>
+
+    <div class="chat-compose">
+      <textarea id="chat-input" rows="1" placeholder="พิมพ์ข้อความ… (Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่)"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,160)+'px'"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();Spice.sendChat()}"></textarea>
+      <button class="btn btn--primary" id="chat-send" onclick="Spice.sendChat()">ส่ง</button>
+    </div>`;
+
+  Spice.scrollChat();
+  if (data.pending) Spice.showLiveBubble(data.pending.result || "");
+  document.getElementById("chat-input")?.focus();
+};
+
+Spice.renderBubble = function (message) {
+  const mine = message.role === "user";
+  return `
+    <div class="bubble-row ${mine ? "mine" : ""}">
+      <div class="bubble ${mine ? "bubble--mine" : ""}">${Spice.esc(message.content)}</div>
+    </div>`;
+};
+
+Spice.showLiveBubble = function (text) {
+  const slot = document.getElementById("chat-live");
+  if (!slot) return;
+  slot.innerHTML = `
+    <div class="bubble-row">
+      <div class="bubble bubble--live">${Spice.esc(text)}<span class="caret"></span></div>
+    </div>`;
+  Spice.scrollChat();
+};
+
+Spice.scrollChat = function () {
+  const box = document.getElementById("chat-scroll");
+  if (box) box.scrollTop = box.scrollHeight;
+};
+
+Spice.sendChat = async function () {
+  const field = document.getElementById("chat-input");
+  const button = document.getElementById("chat-send");
+  const content = field.value.trim();
+  if (!content || !Spice.state.activeThread) return;
+
+  field.value = "";
+  field.style.height = "auto";
+  button.disabled = true;
+  // ต้องแทรกก่อนช่องคำตอบสด ไม่งั้นฟองข้อความจะสลับลำดับกัน
+  document.getElementById("chat-live").insertAdjacentHTML(
+    "beforebegin", Spice.renderBubble({ role: "user", content }));
+  Spice.showLiveBubble("");
+  Spice.state.liveText = "";
+
+  try {
+    const body = await Spice.post(
+      `/api/v1/threads/${Spice.state.activeThread}/messages`, { content });
+    Spice.state.pendingJob = body.job_id;
+    if (body.from_cache) {
+      Spice.toast("ตอบจากผลลัพธ์ที่เคยคำนวณไว้ — ไม่ได้ใช้ GPU", "ok");
+      Spice.openThread(Spice.state.activeThread);
+    }
+  } catch (error) {
+    Spice.toast(error.message, "error");
+    document.getElementById("chat-live").innerHTML = "";
+  } finally {
+    button.disabled = false;
+  }
+};
+
+Spice.deleteThread = async function (threadId) {
+  await Spice.del(`/api/v1/threads/${threadId}`);
+  if (Spice.state.activeThread === threadId) Spice.state.activeThread = null;
+  Spice.toast("ลบบทสนทนาแล้ว", "ok");
+  Spice.render();
+};
+
 /* ═══ ตั้งค่า ══════════════════════════════════════════════ */
 Spice.views.settings = async function () {
   const me = Spice.state.me;
@@ -1217,4 +1425,78 @@ Spice.views.settings = async function () {
         <button class="btn btn--danger btn--sm" onclick="Spice.logout()">ออกจากระบบ</button>
       </div>
     </div>`;
+};
+
+
+/* ── งานชุด ─────────────────────────────────────────────── */
+Spice.submitBatch = async function () {
+  const prompt = document.getElementById("b-prompt").value.trim();
+  const items = document.getElementById("b-items").value
+    .split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!prompt) return Spice.toast("ใส่คำสั่งก่อน", "warn");
+  if (!items.length) return Spice.toast("ใส่รายการอย่างน้อยหนึ่งบรรทัด", "warn");
+
+  try {
+    const body = await Spice.post("/api/v1/batches", {
+      prompt, items,
+      model: Spice.state.selectedModel || "auto",
+      as_drive_files: document.getElementById("b-drive").checked,
+    });
+    Spice.state.watchBatch = body.batch_id;
+    Spice.toast(
+      `แตกเป็น ${body.total} งาน กระจายให้ ${body.workers || 0} เครื่อง · คาดว่า ${Spice.duration(body.eta_seconds)}`,
+      "ok", 6000);
+    Spice.renderBatch(body.batch_id);
+  } catch (error) {
+    Spice.toast(error.message, "error", 8000);
+  }
+};
+
+Spice.renderBatch = async function (batchId) {
+  const slot = document.getElementById("batch-slot");
+  if (!slot) return;
+  const { batch, jobs } = await Spice.get(`/api/v1/batches/${batchId}`);
+
+  slot.innerHTML = `
+    <div class="card" style="padding:1rem">
+      <div class="card-head" style="margin-bottom:0.7rem">
+        <h3 style="font-size:0.95rem">${Spice.esc(batch.title)}</h3>
+        <span class="pill ${batch.finished ? "pill--online" : "pill--busy"}">
+          ${batch.done}/${batch.total} เสร็จ${batch.failed ? ` · ${batch.failed} ล้มเหลว` : ""}
+        </span>
+      </div>
+      <div class="bar" style="margin-bottom:0.8rem">
+        <i style="width:${Math.round(batch.progress * 100)}%"></i>
+      </div>
+      <div class="stack" style="gap:0.3rem;max-height:220px;overflow-y:auto">
+        ${jobs.map((job) => {
+          const status = Spice.JOB_STATUS[job.status] || Spice.JOB_STATUS.queued;
+          return `<div class="row" style="gap:0.5rem">
+            <span class="pill ${status.pill}" style="min-width:76px;justify-content:center;font-size:0.7rem">
+              ${status.label}</span>
+            <span class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${Spice.esc(job.title)}</span>
+            ${job.from_cache ? `<span class="tag">แคช</span>` : ""}
+          </div>`;
+        }).join("")}
+      </div>
+      ${batch.finished ? `
+        <button class="btn btn--sm btn--primary btn--block" style="margin-top:0.8rem"
+                onclick="Spice.exportBatch('${batchId}')">📋 คัดลอกผลทั้งชุด</button>` : ""}
+    </div>`;
+};
+
+Spice.exportBatch = async function (batchId) {
+  const body = await Spice.get(`/api/v1/batches/${batchId}/export`);
+  try {
+    await navigator.clipboard.writeText(body.markdown);
+    Spice.toast(`คัดลอกผล ${body.count} รายการแล้ว`, "ok");
+  } catch {
+    Spice.modal(`<h3>ผลลัพธ์ทั้งชุด</h3>
+      ${Spice.codeBlock(body.markdown, "batch-export")}
+      <div class="row row--between" style="margin-top:1rem">
+        <span class="tiny dim">${body.count} รายการ</span>
+        <button class="btn btn--sm" data-modal-close>ปิด</button>
+      </div>`);
+  }
 };

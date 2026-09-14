@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     error       TEXT NOT NULL DEFAULT '',
     priority    INTEGER NOT NULL DEFAULT 5,
     parent_id   TEXT,                          -- งานนี้เกิดจากผลลัพธ์ของงานไหน
+    thread_id   TEXT,                          -- อยู่ในบทสนทนาไหน
+    batch_id    TEXT,                          -- เป็นส่วนหนึ่งของงานชุดไหน
+    from_cache  INTEGER NOT NULL DEFAULT 0,    -- ได้คำตอบจากแคชโดยไม่ใช้ GPU
+    repairs     TEXT NOT NULL DEFAULT '[]',    -- ประวัติที่ระบบซ่อมผลลัพธ์ให้เอง
     chain       TEXT NOT NULL DEFAULT '[]',    -- ขั้นตอนที่เหลือของลูกโซ่
     plan        TEXT NOT NULL DEFAULT '{}',    -- แผนและเหตุผลที่สมองเลือกไว้
     attempt     INTEGER NOT NULL DEFAULT 1,    -- ครั้งที่เท่าไหร่ (ใช้กับการลองใหม่อัตโนมัติ)
@@ -118,6 +122,52 @@ CREATE TABLE IF NOT EXISTS vault_docs (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vault ON vault_docs(user_id, collection);
+
+-- บทสนทนาต่อเนื่อง — งานแต่ละชิ้นจำบริบทของรอบก่อนหน้าได้
+CREATE TABLE IF NOT EXISTS threads (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL DEFAULT '',
+    model      TEXT NOT NULL DEFAULT 'auto',
+    system     TEXT NOT NULL DEFAULT '',
+    use_vault  INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_threads ON threads(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,              -- user | assistant
+    content    TEXT NOT NULL DEFAULT '',
+    job_id     TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages ON messages(thread_id, id);
+
+-- ผลลัพธ์ที่เคยคำนวณไว้แล้ว — ถามซ้ำไม่ต้องจุด GPU ใหม่
+CREATE TABLE IF NOT EXISTS result_cache (
+    fingerprint TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    model       TEXT NOT NULL DEFAULT '',
+    preview     TEXT NOT NULL DEFAULT '',
+    result      TEXT NOT NULL DEFAULT '',
+    hits        INTEGER NOT NULL DEFAULT 0,
+    saved_seconds REAL NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL,
+    last_hit_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cache_user ON result_cache(user_id, last_hit_at DESC);
+
+-- งานชุด — สั่งครั้งเดียวแตกเป็นหลายงานวิ่งขนานกันทุกเครื่อง
+CREATE TABLE IF NOT EXISTS batches (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL DEFAULT '',
+    total      INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
 
 -- โมเดลที่ผู้ใช้ดึงมาเองจาก Hugging Face (นอกเหนือจากแค็ตตาล็อกในตัว)
 CREATE TABLE IF NOT EXISTS custom_models (
@@ -196,6 +246,10 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "eta_seconds", "REAL NOT NULL DEFAULT 0"),
     ("jobs", "progress_at", "REAL"),
+    ("jobs", "thread_id", "TEXT"),
+    ("jobs", "batch_id", "TEXT"),
+    ("jobs", "from_cache", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "repairs", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 

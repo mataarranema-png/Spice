@@ -39,7 +39,7 @@ def heartbeat_loop(server: str, token: str, state: dict) -> None:
     while not STOP.is_set():
         used = random.randint(1200, 3000) if state["status"] == "idle" else random.randint(9000, 14200)
         try:
-            call(server, "/api/v1/worker/heartbeat", {
+            reply = call(server, "/api/v1/worker/heartbeat", {
                 "status": state["status"],
                 "warm_models": state["warm"],
                 "gpu_used_mb": used,
@@ -48,9 +48,35 @@ def heartbeat_loop(server: str, token: str, state: dict) -> None:
                 "gpu_vram_mb": 15360,
                 "drive_mounted": True,
             }, token)
+            hint = reply.get("preload") if isinstance(reply, dict) else None
+            if hint and hint["model"] not in state["warm"]:
+                print(f"🔥 เซิร์ฟเวอร์แนะนำให้โหลด {hint['model']} รอไว้ ({hint['reason']})")
+                state["warm"] = ([*state["warm"], hint["model"]])[-4:]
         except Exception as exc:
             print(f"  ⚠ heartbeat: {exc}")
         STOP.wait(5)
+
+
+def chunks(text: str, size: int):
+    for index in range(0, len(text), size):
+        yield text[index : index + size]
+
+
+def build_reply(job: dict) -> str:
+    """สร้างคำตอบจำลองที่สอดคล้องกับสิ่งที่ถูกถามมา."""
+    payload = job.get("payload", {})
+    messages = payload.get("messages") or []
+    if messages:
+        last = next((item["content"] for item in reversed(messages)
+                     if item.get("role") == "user"), "")
+        turns = len([item for item in messages if item.get("role") == "user"])
+        return (
+            f"(คำตอบจำลอง · รอบที่ {turns} ของบทสนทนานี้)\n\n"
+            f"คุณเพิ่งถามว่า “{last[:80]}”\n\n"
+            "เครื่องทดสอบเห็นบริบทของรอบก่อนหน้าครบถ้วน แปลว่าระบบความจำของ"
+            "บทสนทนาทำงานถูกต้อง เมื่อเชื่อม Colab จริง ตรงนี้จะเป็นคำตอบจากโมเดลที่เลือกไว้."
+        )
+    return REPLY
 
 
 REPLY = (
@@ -95,6 +121,9 @@ def main() -> int:
 
             state["status"] = "busy"
             print(f"⚙ รับงาน {job['id']} ({job['model']})")
+            messages = job["payload"].get("messages") or []
+            if messages:
+                print(f"   บทสนทนา {len(messages)} รอบ")
             steps = [
                 (0.15, "เตรียมสภาพแวดล้อมและตรวจการ์ดจอ"),
                 (0.35, f"กำลังโหลดโมเดล {job['payload'].get('repo', '')}"),
@@ -106,9 +135,20 @@ def main() -> int:
                      {"progress": progress, "message": message}, token)
                 time.sleep(1.2 * args.speed)
 
+            # พิมพ์คำตอบทีละท่อนเหมือนโมเดลจริง เพื่อให้หน้าเว็บเห็นข้อความไหลมา
+            answer = build_reply(job)
+            sent = 0
+            for chunk in chunks(answer, 26):
+                call(args.server, f"/api/v1/worker/jobs/{job['id']}/stream",
+                     {"delta": chunk, "progress": min(0.95, 0.5 + sent / max(1, len(answer)))},
+                     token)
+                sent += len(chunk)
+                time.sleep(0.12 * args.speed)
+
             call(args.server, f"/api/v1/worker/jobs/{job['id']}/complete", {
-                "result": REPLY,
-                "meta": {"tokens": random.randint(180, 420), "tokens_per_second": round(random.uniform(18, 34), 1)},
+                "result": "",     # สตรีมไปครบแล้ว ไม่ต้องส่งซ้ำ
+                "meta": {"tokens": len(answer) // 3,
+                         "tokens_per_second": round(random.uniform(18, 34), 1)},
             }, token)
             if job["model"] not in state["warm"]:
                 state["warm"] = ([*state["warm"], job["model"]])[-4:]

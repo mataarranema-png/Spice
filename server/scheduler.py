@@ -148,3 +148,47 @@ def blocked_reason(user_id: int, job_model: str, job_kind: str) -> str:
             return ""            # มีเครื่องที่รับไหว แค่ยังไม่ถึงคิว
         reasons.append(f"{row['name']}: {why}")
     return "ไม่มีเครื่องที่รับงานนี้ไหว — " + " · ".join(reasons[:3])
+
+
+# ── โหลดโมเดลรอไว้ล่วงหน้า ───────────────────────────────────
+PRELOAD_WINDOW_DAYS = 7
+
+
+def suggest_preload(worker: dict) -> dict | None:
+    """เครื่องว่างและคิวโล่ง — บอกให้มันโหลดโมเดลที่น่าจะถูกใช้ต่อไปรอไว้เลย.
+
+    ค่าโหลดโมเดลครั้งแรกคือส่วนที่นานที่สุดของงานแรกในแต่ละวัน การเอาเวลาว่าง
+    ที่ยังไงก็เสียเปล่าไปโหลดรอไว้ ทำให้งานแรกที่สั่งจริงเริ่มได้ทันที.
+    """
+    warm = set(db.loads(worker.get("warm_models"), []) if isinstance(
+        worker.get("warm_models"), str) else (worker.get("warm_models") or []))
+
+    pending = db.query_one(
+        "SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND status IN ('queued','running')",
+        (worker["user_id"],),
+    )["n"]
+    if pending:
+        return None          # มีงานค้างอยู่ อย่าไปแย่ง VRAM กับงานจริง
+
+    since = time.time() - PRELOAD_WINDOW_DAYS * 86400
+    rows = db.query(
+        """SELECT model, COUNT(*) AS uses FROM jobs
+           WHERE user_id = ? AND created_at > ? AND model != ''
+           GROUP BY model ORDER BY uses DESC LIMIT 5""",
+        (worker["user_id"], since),
+    )
+    for row in rows:
+        if row["model"] in warm:
+            return None      # ตัวที่ใช้บ่อยที่สุดอยู่ในเครื่องแล้ว ไม่ต้องทำอะไร
+        ok, _ = job_fits_worker(row["model"], (catalog.get(row["model"]) or {}).get("kind", "text"), worker)
+        if ok:
+            model = catalog.get(row["model"])
+            return {
+                "model": row["model"],
+                "repo": model["repo"],
+                "quantize": model["quantize"],
+                "kind": model["kind"],
+                "trust_remote_code": bool(model.get("trust_remote_code")),
+                "reason": f"ใช้บ่อยที่สุดใน {PRELOAD_WINDOW_DAYS} วันที่ผ่านมา ({row['uses']} งาน)",
+            }
+    return None

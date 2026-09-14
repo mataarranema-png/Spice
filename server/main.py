@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, auth, db
 from .config import ROOT, get_settings
-from .routers import auth_routes, drive, hub, jobs, vault_routes, workers
+from .routers import (auth_routes, batches, drive, hub, jobs, threads,
+                      vault_routes, workers)
 
 WEB_DIR = ROOT / "web"
 COLAB_DIR = ROOT / "colab"
@@ -38,6 +39,8 @@ app.include_router(jobs.router)
 app.include_router(drive.router)
 app.include_router(vault_routes.router)
 app.include_router(hub.router)
+app.include_router(threads.router)
+app.include_router(batches.router)
 
 
 @app.middleware("http")

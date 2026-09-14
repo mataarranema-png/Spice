@@ -256,6 +256,17 @@ class SpiceClient:
     def lease(self) -> dict | None:
         return self.post("/api/v1/worker/lease", {}, timeout=25).get("job")
 
+    def stream(self, job_id: str, delta: str, progress: float = 0) -> None:
+        """ส่งข้อความที่โมเดลเพิ่งพิมพ์ออกมาให้หน้าเว็บเห็นทันที."""
+        try:
+            self.post(
+                f"/api/v1/worker/jobs/{job_id}/stream",
+                {"delta": delta, "progress": progress},
+                timeout=12,
+            )
+        except Exception:
+            pass      # สตรีมหลุดไม่ควรทำให้งานล่ม เดี๋ยวตอนจบก็ส่งผลเต็มอยู่ดี
+
     def progress(self, job_id: str, value: float, message: str = "", level: str = "info") -> None:
         try:
             self.post(
@@ -427,16 +438,21 @@ def run_text(job: dict, client: SpiceClient) -> tuple[str, dict]:
     tokenizer, model = _model_cache[cache_key]
     client.progress(job["id"], 0.5, "โมเดลพร้อม เริ่มสร้างคำตอบ")
 
-    messages = []
-    if payload.get("system"):
-        messages.append({"role": "system", "content": payload["system"]})
-    prompt = payload.get("prompt", "")
+    # บทสนทนาต่อเนื่องจะส่ง messages มาครบ ใช้ตรง ๆ ได้เลย
+    messages = list(payload.get("messages") or [])
+    if messages:
+        prompt = ""
+    else:
+        if payload.get("system"):
+            messages.append({"role": "system", "content": payload["system"]})
+        prompt = payload.get("prompt", "")
     if payload.get("drive_input"):
         source = resolve_path(payload["drive_input"])
         if os.path.isfile(source):
             with open(source, "r", encoding="utf-8", errors="ignore") as handle:
                 prompt = f"{prompt}\n\n--- เนื้อหาไฟล์ {os.path.basename(source)} ---\n{handle.read()[:20000]}"
-    messages.append({"role": "user", "content": prompt})
+    if prompt:
+        messages.append({"role": "user", "content": prompt})
 
     try:
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -444,24 +460,58 @@ def run_text(job: dict, client: SpiceClient) -> tuple[str, dict]:
         text = "\n".join(item["content"] for item in messages)
 
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    max_new = int(payload.get("max_tokens", 512))
+    temperature = float(payload.get("temperature", 0.7))
+    generate_kwargs = dict(
+        **inputs,
+        max_new_tokens=max_new,
+        temperature=temperature or 0.01,
+        do_sample=temperature > 0,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    if payload.get("repetition_penalty"):
+        generate_kwargs["repetition_penalty"] = float(payload["repetition_penalty"])
+
     started = time.time()
-    with _torch().inference_mode():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=int(payload.get("max_tokens", 512)),
-            temperature=float(payload.get("temperature", 0.7)) or 0.01,
-            do_sample=float(payload.get("temperature", 0.7)) > 0,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    generated = output[0][inputs["input_ids"].shape[-1] :]
-    answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    answer = ""
+    try:
+        from transformers import TextIteratorStreamer
+
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        generate_kwargs["streamer"] = streamer
+        worker_thread = threading.Thread(
+            target=lambda: model.generate(**generate_kwargs), daemon=True)
+        with _torch().inference_mode():
+            worker_thread.start()
+            buffer, last_sent = "", time.time()
+            for piece in streamer:
+                answer += piece
+                buffer += piece
+                # ส่งเป็นช่วง ๆ ไม่ใช่ทุกโทเคน ไม่งั้นยิงคำขอถี่เกินจำเป็น
+                if len(buffer) >= 48 or time.time() - last_sent > 0.6:
+                    client.stream(job["id"], buffer,
+                                  progress=min(0.95, 0.5 + len(answer) / max(1, max_new * 3)))
+                    buffer, last_sent = "", time.time()
+            if buffer:
+                client.stream(job["id"], buffer, progress=0.97)
+        worker_thread.join(timeout=5)
+        generated_tokens = len(tokenizer.encode(answer))
+    except ImportError:
+        # transformers รุ่นเก่าไม่มี streamer — ถอยไปใช้แบบรอจนจบ
+        with _torch().inference_mode():
+            output = model.generate(**generate_kwargs)
+        generated = output[0][inputs["input_ids"].shape[-1]:]
+        answer = tokenizer.decode(generated, skip_special_tokens=True)
+        generated_tokens = int(generated.shape[-1])
+    answer = answer.strip()
 
     elapsed = time.time() - started
     meta = {
-        "tokens": int(generated.shape[-1]),
+        "tokens": generated_tokens,
         "seconds": round(elapsed, 2),
-        "tokens_per_second": round(int(generated.shape[-1]) / elapsed, 1) if elapsed else 0,
+        "tokens_per_second": round(generated_tokens / elapsed, 1) if elapsed else 0,
         "repo": repo,
+        "streamed": True,
     }
     if payload.get("drive_output"):
         out_file = "/tmp/spice_output.txt"
@@ -591,10 +641,53 @@ RUNNERS = {
 
 
 # ── ลูปหลัก ───────────────────────────────────────────────────
+def preload_model(client: SpiceClient, hint: dict, state: dict) -> None:
+    """โหลดโมเดลเข้าเครื่องรอไว้ตอนว่าง เพื่อให้งานจริงเริ่มได้ทันที."""
+    model_id = hint.get("model", "")
+    if not model_id or model_id in _warm_models or state["status"] != "idle":
+        return
+    state["status"] = "busy"
+    log(f"ว่างอยู่ — โหลด {model_id} รอไว้ก่อน ({hint.get('reason', '')})", "🔥")
+    try:
+        fake_job = {
+            "id": "preload",
+            "payload": {
+                "repo": hint.get("repo", ""), "quantize": hint.get("quantize", "fp16"),
+                "trust_remote_code": hint.get("trust_remote_code", False),
+                "prompt": "พร้อมหรือยัง", "max_tokens": 1, "temperature": 0.0,
+            },
+        }
+
+        class _Quiet:
+            """ตอนโหลดรอไว้ ไม่ต้องรายงานความคืบหน้าไปรบกวนหน้าเว็บ."""
+
+            def progress(self, *args, **kwargs):
+                pass
+
+            def stream(self, *args, **kwargs):
+                pass
+
+        RUNNERS.get(hint.get("kind", "text"), run_text)(fake_job, _Quiet())
+        mark_warm(model_id)
+        log(f"โหลด {model_id} รอไว้แล้ว งานถัดไปจะเริ่มได้ทันที", "✅")
+    except Exception as exc:
+        log(f"โหลดรอไว้ไม่สำเร็จ (ไม่เป็นไร): {exc}", "⚠")
+    finally:
+        state["status"] = "idle"
+
+
 def heartbeat_loop(client: SpiceClient, state: dict) -> None:
     while not _stop.is_set():
         try:
-            client.heartbeat(state["status"], state["drive_mounted"])
+            reply = client.heartbeat(state["status"], state["drive_mounted"])
+            hint = reply.get("preload")
+            if hint and state["status"] == "idle" and not state.get("preloading"):
+                state["preloading"] = True
+                threading.Thread(
+                    target=lambda: (preload_model(client, hint, state),
+                                    state.update(preloading=False)),
+                    daemon=True,
+                ).start()
         except Exception as exc:
             log(f"ส่งสัญญาณชีพไม่สำเร็จ: {exc}", "⚠")
         _stop.wait(HEARTBEAT_SECONDS)

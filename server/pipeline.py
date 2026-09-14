@@ -10,10 +10,11 @@ import json
 import time
 import uuid
 
-from . import brain, catalog, db, events
+from . import brain, cache, catalog, db, events, quality
 
 MAX_CARRY_CHARS = 24_000      # ผลลัพธ์ที่ส่งต่อให้ขั้นถัดไป ยาวได้แค่ไหน
 MAX_ATTEMPTS = 2              # ลองกู้อัตโนมัติได้กี่ครั้งต่อหนึ่งงาน
+MAX_REPAIRS = 2               # ซ่อมผลลัพธ์ที่ใช้ไม่ได้ได้กี่รอบ
 
 
 def build_payload(step: dict, previous_result: str = "", context: str = "") -> dict:
@@ -35,9 +36,19 @@ def build_payload(step: dict, previous_result: str = "", context: str = "") -> d
             "ถ้าข้อมูลไม่พอให้บอกตรง ๆ อย่าเดา:\n" + context
         )
 
+    messages = step.get("messages") or []
+    if messages and context:
+        # แทรกบริบทจากคลังความรู้เข้าไปในคำสั่งระบบของบทสนทนา
+        messages = [item for item in messages]
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": system}
+        else:
+            messages.insert(0, {"role": "system", "content": system})
+
     return {
         "prompt": prompt,
         "system": system,
+        "messages": messages,
         "max_tokens": int(step.get("max_tokens", 768)),
         "temperature": float(step.get("temperature", 0.6)),
         "repo": model.get("repo", ""),
@@ -59,29 +70,56 @@ def create_job(
     eta_seconds: float = 0,
     previous_result: str = "",
     context: str = "",
+    thread_id: str | None = None,
+    batch_id: str | None = None,
+    use_cache: bool = True,
     log_message: str = "เข้าคิวแล้ว รอเครื่องว่าง",
 ) -> str:
     now = time.time()
     job_id = f"job_{uuid.uuid4().hex[:12]}"
+    kind = step.get("kind", "text")
+    model = step.get("model", "")
     payload = build_payload(step, previous_result, context)
     title = (step.get("title") or payload["prompt"][:60] or "งานใหม่").strip()[:120]
 
+    # เคยตอบคำถามนี้ไปแล้วหรือเปล่า — ถ้าเคย ก็ไม่ต้องจุดการ์ดจอใหม่
+    cached = None
+    key = ""
+    if use_cache and cache.is_cacheable(payload, kind):
+        key = cache.fingerprint(model, payload)
+        cached = cache.lookup(user_id, key)
+
+    status = "done" if cached else "queued"
     db.execute(
         """INSERT INTO jobs
            (id, user_id, kind, model, title, payload, status, priority,
-            parent_id, chain, plan, attempt, eta_seconds, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            parent_id, chain, plan, attempt, eta_seconds, created_at,
+            thread_id, batch_id, from_cache, result, progress, started_at, finished_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            job_id, user_id, step.get("kind", "text"), step.get("model", ""), title,
-            json.dumps(payload, ensure_ascii=False), "queued", priority,
+            job_id, user_id, kind, model, title,
+            json.dumps(payload, ensure_ascii=False), status, priority,
             parent_id, json.dumps(chain or [], ensure_ascii=False),
             json.dumps(plan or {}, ensure_ascii=False), 1, eta_seconds, now,
+            thread_id, batch_id, 1 if cached else 0,
+            cached["result"] if cached else "", 1.0 if cached else 0,
+            now if cached else None, now if cached else None,
         ),
     )
     db.execute(
         "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
-        (job_id, now, "info", log_message),
+        (job_id, now, "success" if cached else "info",
+         "ตอบจากผลลัพธ์ที่เคยคำนวณไว้แล้ว — ไม่ได้ใช้ GPU เลย" if cached else log_message),
     )
+
+    if cached:
+        cache.record_hit(key, eta_seconds)
+        events.publish(
+            user_id, "job",
+            {"action": "finished", "job_id": job_id, "status": "done",
+             "from_cache": True, "duration": 0},
+        )
+        advance_chain(db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,)))
     return job_id
 
 
@@ -167,3 +205,43 @@ def maybe_recover(row, error: str) -> str | None:
         {"action": "recovered", "job_id": row["id"], "model": fallback, "message": message},
     )
     return fallback
+
+
+def maybe_repair(row, result: str, meta: dict) -> quality.Verdict | None:
+    """ผลลัพธ์ที่ "เสร็จแล้วแต่ใช้ไม่ได้" → ปรับพารามิเตอร์แล้วสั่งทำใหม่.
+
+    ต่างจาก maybe_recover ตรงที่งานไม่ได้โยน error ออกมาเลย มันบอกว่าสำเร็จ
+    แต่สิ่งที่ได้กลับมาคือข้อความว่าง ประโยคที่ถูกตัด หรือคำที่วนซ้ำไม่จบ.
+    """
+    payload = db.loads(row["payload"], {})
+    verdict = quality.inspect(result, meta, payload)
+    if verdict.ok:
+        return None
+
+    repairs = db.loads(row["repairs"], [])
+    if len(repairs) >= MAX_REPAIRS:
+        return None
+
+    payload.update(verdict.repair or {})
+    repairs.append({"problem": verdict.problem, "detail": verdict.detail,
+                    "changed": verdict.repair or {}, "at": time.time()})
+    now = time.time()
+    db.execute(
+        """UPDATE jobs
+           SET status='queued', payload=?, repairs=?, worker_id=NULL, started_at=NULL,
+               progress_at=NULL, progress=0, result='', error=''
+           WHERE id=?""",
+        (json.dumps(payload, ensure_ascii=False),
+         json.dumps(repairs, ensure_ascii=False), row["id"]),
+    )
+    message = quality.describe_repair(verdict)
+    db.execute(
+        "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+        (row["id"], now, "warn", message),
+    )
+    events.publish(
+        row["user_id"], "job",
+        {"action": "repaired", "job_id": row["id"], "problem": verdict.problem,
+         "message": message},
+    )
+    return verdict
