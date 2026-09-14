@@ -17,7 +17,7 @@ const Views = (() => {
         <span class="stat-label">${esc(o.label)}</span>
         ${o.chip || ''}
       </div>
-      <div class="stat-value">${o.html || esc(o.value)}${o.unit ? `<span class="unit">${esc(o.unit)}</span>` : ''}</div>
+      <div class="stat-value${o.compact ? ' is-compact' : ''}">${o.html || esc(o.value)}${o.unit ? `<span class="unit">${esc(o.unit)}</span>` : ''}</div>
       ${o.note ? `<p class="stat-note">${o.note}</p>` : ''}
       ${o.spark ? `<div class="stat-spark">${o.spark}</div>` : ''}
       ${o.meter !== undefined ? `<div class="meter ${o.meterTone || ''}" style="margin-top:10px"><span style="width:${Math.min(100, Math.max(0, o.meter))}%"></span></div>` : ''}
@@ -671,6 +671,194 @@ const Views = (() => {
     return h(html);
   }
 
+
+  /* ========================================================= ศูนย์วิเคราะห์ */
+
+  function metricRow(label, value, hint) {
+    return `<div class="kv"><span>${esc(label)}${hint ? `<i class="hint" title="${esc(hint)}">?</i>` : ''}</span>
+      <strong>${value}</strong></div>`;
+  }
+
+  function gradeChip(health) {
+    if (health.score === null) return '<span class="chip chip-mute">ข้อมูลไม่พอ</span>';
+    return `<span class="chip chip-${health.tone}"><i class="dot"></i>${health.score} · ${esc(health.grade)}</span>`;
+  }
+
+  async function intel() {
+    const d = await api.get('/api/intelligence');
+    const cur = d.base_currency;
+    const f = d.forecast;
+
+    /* ---- กราฟพัด: ช่วงที่รายได้น่าจะไปจบ ---- */
+    let fanChart;
+    if (f.enough && f.fan.length > 1) {
+      const labels = f.fan.map((x) => (x.d === 0 ? 'วันนี้' : '+' + x.d));
+      fanChart = Chart.line({
+        labels, height: 260,
+        series: [
+          { name: 'ดีกว่าคาด (P90)', color: Chart.colors.ok, digits: 2, dashed: true,
+            points: false, values: f.fan.map((x) => x.p90) },
+          { name: 'ค่ากลาง (P50)', color: Chart.colors.accent, digits: 2, area: true,
+            points: false, values: f.fan.map((x) => x.p50) },
+          { name: 'แย่กว่าคาด (P10)', color: Chart.colors.crit, digits: 2, dashed: true,
+            points: false, values: f.fan.map((x) => x.p10) },
+        ],
+        title: 'ช่วงรายได้ที่เป็นไปได้ถึงสิ้นรอบ',
+      });
+    } else {
+      fanChart = emptyBox('ยังพยากรณ์ไม่ได้', f.reason || 'ต้องมีข้อมูลรายวันอย่างน้อย 20 วัน');
+    }
+
+    /* ---- ธงเตือนจากผลวิเคราะห์ ---- */
+    const flagHtml = d.flags.length
+      ? d.flags.map((fl) => `<div class="alert-item level-${fl.level === 'critical' ? 'critical' : fl.level}">
+          <span class="alert-mark"></span>
+          <div>
+            <div class="alert-title">${esc(fl.title)}</div>
+            <p class="alert-detail">${esc(fl.detail)}</p>
+          </div>
+          <div class="alert-actions">
+            ${fl.account_id ? `<a class="btn btn-sm btn-ghost" href="#/account?id=${fl.account_id}">ดูพอร์ต</a>` : ''}
+          </div>
+        </div>`).join('')
+      : emptyBox('ไม่พบเรื่องที่ต้องกังวล', 'ทุกพอร์ตผ่านเกณฑ์ความเสี่ยงที่ตรวจได้');
+
+    /* ---- การ์ดรายพอร์ต ---- */
+    const cards = d.accounts.map((a) => {
+      const r = a.risk;
+      const hd = a.hidden;
+      const rec = a.recovery;
+      if (!r.enough) {
+        return `<div class="card">
+          <div class="card-head"><div><h2>${esc(a.name)}</h2><p>มีข้อมูลเพียง ${num(r.days)} วัน</p></div></div>
+          ${emptyBox('ข้อมูลยังไม่พอวิเคราะห์', 'ต้องมีอย่างน้อย 20 วันทำการ')}
+        </div>`;
+      }
+      const hitSignals = (hd.signals || []).filter((s) => s.hit);
+      return `<div class="card">
+        <div class="card-head">
+          <div><h2>${esc(a.name)}</h2><p>${num(r.days)} วันทำการ · สกุล ${esc(a.currency)}</p></div>
+          <div class="card-tools">${gradeChip(a.health)}
+            <a class="btn btn-sm btn-ghost" href="#/account?id=${a.id}">ดูพอร์ต</a></div>
+        </div>
+
+        <div class="intel-grid">
+          <div>
+            <p class="section-label">ผลตอบแทนต่อความเสี่ยง</p>
+            <div class="kv-list">
+              ${metricRow('Sharpe', r.sharpe === null ? '-' : num(r.sharpe, 2),
+                          'ผลตอบแทนต่อหนึ่งหน่วยความผันผวน ยิ่งสูงยิ่งดี เกิน 1 ถือว่าใช้ได้')}
+              ${metricRow('Sortino', r.sortino === null ? '-' : num(r.sortino, 2),
+                          'เหมือน Sharpe แต่นับเฉพาะความผันผวนฝั่งขาดทุน')}
+              ${metricRow('Calmar', r.calmar === null ? '-' : num(r.calmar, 2),
+                          'ผลตอบแทนต่อปีหารด้วยขาดทุนสะสมที่ลึกที่สุด')}
+              ${metricRow('ผลตอบแทนต่อปี', pct(r.annual_return_pct, 2))}
+              ${metricRow('ความผันผวนต่อปี', pct(r.volatility_pct, 2))}
+            </div>
+          </div>
+          <div>
+            <p class="section-label">ความเสียหายที่ต้องรับได้</p>
+            <div class="kv-list">
+              ${metricRow('ขาดทุนสะสมลึกสุด', pct(r.max_dd_pct, 2))}
+              ${metricRow('จมน้ำนานสุด', num(r.longest_underwater) + ' วัน',
+                          'จำนวนวันทำการที่ยาวที่สุดที่พอร์ตยังไม่กลับไปแตะจุดสูงสุดเดิม')}
+              ${metricRow('VaR 95% ต่อวัน', money(r.var95_money, a.currency),
+                          'วันแย่ระดับ 1 ใน 20 คาดว่าจะเสียประมาณเท่านี้')}
+              ${metricRow('ถ้าแย่กว่านั้น', money(r.cvar95_money, a.currency),
+                          'ค่าเฉลี่ยของวันที่แย่กว่า VaR หรือ Expected Shortfall')}
+              ${metricRow('วันแย่ที่สุดที่เคยเจอ', `<span class="money-down">${num(r.worst_day, 2)}</span>`)}
+            </div>
+          </div>
+          <div>
+            <p class="section-label">นิสัยการเทรด</p>
+            <div class="kv-list">
+              ${metricRow('อัตราชนะ', pct(r.win_rate_pct, 1))}
+              ${metricRow('Profit Factor', r.profit_factor === null ? '-' : num(r.profit_factor, 2),
+                          'กำไรรวมหารด้วยขาดทุนรวม ต่ำกว่า 1 คือขาดทุน')}
+              ${metricRow('วันชนะเฉลี่ย', `<span class="money-up">${num(r.avg_win, 2)}</span>`)}
+              ${metricRow('วันแพ้เฉลี่ย', `<span class="money-down">${num(r.avg_loss, 2)}</span>`)}
+              ${metricRow('ความเสี่ยงซ่อนเร้น',
+                          hd.enough ? `<span class="chip chip-${hd.level}">${hd.score} / 100</span>` : '-',
+                          'คะแนนจากการตรวจลายเซ็นกลยุทธ์แบบ martingale และ grid')}
+            </div>
+          </div>
+        </div>
+
+        ${hitSignals.length ? `<div class="signal-box">
+          <p class="section-label">สัญญาณที่ตรวจพบ</p>
+          ${hitSignals.map((s) => `<div class="signal"><span class="signal-dot"></span>
+            <div><strong>${esc(s.label)}</strong><p>${esc(s.detail)}</p></div></div>`).join('')}
+        </div>` : ''}
+
+        ${rec.under_water ? `<div class="signal-box">
+          <p class="section-label">โอกาสกลับมาสร้างรายได้</p>
+          <p class="tiny muted">ต้องทำกำไรอีก ${money(rec.gap, a.currency)} จึงจะพ้นจุดสูงสุดเดิมและเริ่มคิดส่วนแบ่งได้อีกครั้ง</p>
+          <div class="prob-row">
+            ${[[30, rec.prob_30], [60, rec.prob_60], [90, rec.prob_90]].map(([dn, p]) => `
+              <div class="prob">
+                <span class="prob-label">ภายใน ${dn} วัน</span>
+                <div class="meter ${p >= 60 ? 'ok' : p >= 30 ? 'warn' : 'crit'}"><span style="width:${p}%"></span></div>
+                <span class="prob-value">${pct(p, 1)}</span>
+              </div>`).join('')}
+          </div>
+          ${rec.median_days ? `<p class="tiny muted">เฉพาะเส้นทางที่กลับมาได้สำเร็จ ใช้เวลากลางประมาณ ${num(rec.median_days)} วันทำการ</p>` : ''}
+        </div>` : ''}
+
+        ${a.health.reasons.length ? `<div class="reason-list">
+          ${a.health.reasons.map((x) => `<span class="reason tone-${x.tone}">${esc(x.text)}</span>`).join('')}
+        </div>` : ''}
+      </div>`;
+    }).join('');
+
+    const probTone = f.enough && f.prob_hit_target !== null
+      ? (f.prob_hit_target >= 65 ? 'ok' : f.prob_hit_target >= 35 ? 'warn' : 'crit') : 'info';
+
+    const html = `<div class="page stack">
+      <div class="card">
+        <div class="card-head">
+          <div><h2>พยากรณ์รายได้สิ้นรอบ ${esc(f.period_label || '')}</h2>
+          <p>${f.enough
+              ? `จำลอง ${num(f.runs)} เส้นทางจากผลตอบแทนจริงของ ${num(f.accounts_n)} พอร์ต ·
+                 เหลืออีก ${num(f.days_left)} วันทำการ · ทุกเส้นทางคิดผ่านกติกา High-Water Mark เดิม`
+              : esc(f.reason || '')}</p></div>
+          <div class="card-tools">
+            <button class="btn btn-sm btn-ghost" onclick="Actions.refreshIntel(this)">คำนวณใหม่</button>
+          </div>
+        </div>
+        ${f.enough ? `<div class="grid g-4">
+          ${stat({ label: 'คิดได้แล้ววันนี้', value: money(f.current), unit: cur, tone: 'info',
+                   note: 'ยอดนี้ยังไม่แน่นอนจนกว่าจะปิดรอบ' })}
+          ${stat({ label: 'ค่ากลางที่คาดว่าจะได้', value: money(f.p50), unit: cur, tone: 'accent',
+                   note: `ครึ่งหนึ่งของเส้นทางจบสูงกว่านี้ · เฉลี่ย ${money(f.mean)}` })}
+          ${stat({ label: 'ช่วงที่น่าจะเกิด 80%', value: money(f.p10) + ' - ' + money(f.p90), tone: 'info', compact: true,
+                   note: `แย่สุด P10 ถึงดีสุด P90 หน่วยเป็น ${esc(cur)}` })}
+          ${stat({ label: 'โอกาสถึงเป้าหมาย',
+                   value: f.prob_hit_target === null ? 'ยังไม่ตั้งเป้า' : pct(f.prob_hit_target, 1),
+                   tone: probTone,
+                   note: f.target > 0 ? `เป้า ${money(f.target)} ${esc(cur)}` : 'ตั้งเป้าได้ที่หน้าเป้าหมายรายได้',
+                   meter: f.prob_hit_target === null ? undefined : f.prob_hit_target,
+                   meterTone: probTone })}
+        </div>` : ''}
+        ${fanChart}
+        ${f.enough && f.prob_below_current >= 10 ? `<p class="alert-hint">
+          มีโอกาส ${pct(f.prob_below_current, 1)} ที่รายได้สิ้นรอบจะต่ำกว่ายอดที่คิดได้วันนี้
+          ถ้าจ่ายตามยอดปัจจุบันไปก่อนแล้วพอร์ตขาดทุนต่อ จะจ่ายเกินเฉลี่ย ${money(f.avg_overpay, cur)}
+          และต้องไปตามเก็บคืนภายหลัง</p>` : ''}
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div><h2>เรื่องที่ต้องรู้</h2><p>สรุปจากการวิเคราะห์ เรียงตามความรุนแรง</p></div>
+        </div>
+        ${flagHtml}
+      </div>
+
+      ${cards}
+    </div>`;
+
+    return h(html);
+  }
+
   /* =============================================================== แจ้งเตือน */
 
   async function alerts() {
@@ -708,5 +896,5 @@ const Views = (() => {
     return h(html);
   }
 
-  return { overview, accounts, accountDetail, earnings, payouts, goals, connect, alerts };
+  return { overview, accounts, accountDetail, earnings, payouts, goals, connect, alerts, intel };
 })();

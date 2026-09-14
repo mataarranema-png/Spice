@@ -11,7 +11,7 @@ Myfxbook Earning System - การเชื่อมต่อบัญชีแ
 import random
 from datetime import date, datetime, timedelta
 
-from . import earnings, myfxbook
+from . import analytics, earnings, myfxbook
 from .database import connect, get_setting, get_settings, now_iso, set_setting
 
 DEFAULT_SYNC_DAYS = 365
@@ -130,6 +130,7 @@ def sync_now(days=DEFAULT_SYNC_DAYS):
 
         kind = settings.get("period_kind") or earnings.MONTH
         periods = earnings.recompute_all(conn, kind)
+        analytics.invalidate()
         set_setting(conn, "last_sync_at", now_iso())
         conn.execute(
             """INSERT INTO sync_log (started_at, finished_at, ok, mode, accounts_n, days_n, detail)

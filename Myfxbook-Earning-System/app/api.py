@@ -7,7 +7,7 @@ Myfxbook Earning System - ชั้น API
 
 from datetime import date, datetime, timedelta
 
-from . import earnings, myfxbook
+from . import analytics, earnings, myfxbook
 from .database import (
     connect, fx_map, get_setting, get_settings, now_iso, set_setting, to_base,
 )
@@ -327,6 +327,7 @@ def save_rule(account_id, body):
         kind = get_setting(conn, "period_kind", earnings.MONTH)
         earnings.recompute_account(conn, account_id, kind)
         conn.commit()
+        analytics.invalidate()
         return {"ok": True, "message": "บันทึกเงื่อนไขส่วนแบ่งและคิดรายได้ใหม่แล้ว"}
     finally:
         conn.close()
@@ -422,6 +423,7 @@ def recompute():
         kind = get_setting(conn, "period_kind", earnings.MONTH)
         n = earnings.recompute_all(conn, kind)
         conn.commit()
+        analytics.invalidate()
         return {"ok": True, "periods": n, "message": "คิดรายได้ใหม่ทั้งหมด %d รอบ" % n}
     finally:
         conn.close()
@@ -661,6 +663,17 @@ def alerts_board():
             add("never-sync", "warn", "ยังไม่เคยซิงก์ข้อมูล",
                 "เชื่อมต่อ Myfxbook แล้วกดซิงก์เพื่อดึงผลการเทรดจริง", "/connect")
 
+        # ดึงเรื่องร้ายแรงจากศูนย์วิเคราะห์มาเตือนด้วย ใช้ผลที่แคชไว้จึงไม่ถ่วงการเปลี่ยนหน้า
+        try:
+            for flag in intelligence().get("flags", []):
+                if flag["level"] == "info":
+                    continue
+                key = "intel-%s-%s" % (flag["level"], flag.get("account_id") or "all")
+                add(key, "critical" if flag["level"] == "critical" else "warn",
+                    flag["title"], flag["detail"], "/intel")
+        except Exception:
+            pass    # ศูนย์วิเคราะห์ล้มต้องไม่ทำให้หน้าแจ้งเตือนทั้งหน้าใช้ไม่ได้
+
         due_total = payouts_due_total(conn, rates, base)
         if due_total > 0:
             add("payout-due", "warn", "มีรายได้ค้างจ่าย",
@@ -717,6 +730,113 @@ def unack_alert(key):
 
 def _money(value):
     return "{:,.2f}".format(value)
+
+
+# ========================================================== ศูนย์วิเคราะห์
+
+def intelligence(runs=analytics.DEFAULT_RUNS, force=False):
+    """
+    รวมทุกอย่างที่วิเคราะห์ได้จากข้อมูลที่มีอยู่แล้ว
+    พยากรณ์รายได้สิ้นรอบ คะแนนสุขภาพรายพอร์ต ความเสี่ยงซ่อนเร้น และโอกาสโผล่พ้น HWM
+    ผลถูกเก็บแคชไว้สองนาที เพราะหน้าแจ้งเตือนก็เรียกใช้ชุดเดียวกัน
+    """
+    return analytics.cached(lambda: _intelligence(runs), force=force)
+
+
+def _intelligence(runs):
+    conn = connect()
+    try:
+        settings, rates, base, kind = _ctx(conn)
+        fc = analytics.forecast(conn, runs=runs)
+
+        items = []
+        for row in conn.execute("SELECT * FROM accounts WHERE tracked = 1 ORDER BY name").fetchall():
+            series = analytics.daily_series(conn, row["id"])
+            metrics = analytics.risk_metrics(series)
+            hidden = analytics.hidden_risk(series, metrics)
+            recovery = analytics.recovery_outlook(conn, row["id"])
+            health = analytics.health_score(metrics, hidden, recovery)
+            items.append({
+                "id": row["id"],
+                "name": row["name"],
+                "currency": row["currency"],
+                "owner": row["owner"],
+                "balance_base": to_base(row["balance"], row["currency"], rates, base),
+                "health": health,
+                "risk": metrics,
+                "hidden": hidden,
+                "recovery": recovery,
+            })
+
+        # เรียงพอร์ตที่น่าห่วงที่สุดขึ้นก่อน คนใช้งานจะได้เห็นเรื่องสำคัญทันที
+        items.sort(key=lambda x: (x["health"]["score"] if x["health"]["score"] is not None else 999))
+
+        flags = _build_flags(items, fc, base)
+        return {
+            "ok": True,
+            "base_currency": base,
+            "forecast": fc,
+            "accounts": items,
+            "flags": flags,
+            "period_kind": kind,
+        }
+    finally:
+        conn.close()
+
+
+def _build_flags(items, fc, base):
+    """สรุปเรื่องที่ต้องรู้จากผลวิเคราะห์ เรียงตามความรุนแรง"""
+    flags = []
+    for it in items:
+        hidden = it["hidden"]
+        if hidden.get("enough") and hidden["level"] == "crit":
+            hits = [s["label"] for s in hidden["signals"] if s["hit"]]
+            flags.append({
+                "level": "critical", "account_id": it["id"],
+                "title": "%s มีลายเซ็นกลยุทธ์เสี่ยงพังทีเดียว" % it["name"],
+                "detail": "คะแนนความเสี่ยงซ่อนเร้น %d จาก 100 · %s · "
+                          "พอร์ตแบบนี้มักกำไรสม่ำเสมอจนถึงวันที่เสียเงินต้นทั้งก้อนในวันเดียว"
+                          % (hidden["score"], ", ".join(hits)),
+            })
+        elif hidden.get("enough") and hidden["level"] == "warn":
+            flags.append({
+                "level": "warn", "account_id": it["id"],
+                "title": "%s มีพฤติกรรมที่ต้องเฝ้าดู" % it["name"],
+                "detail": "คะแนนความเสี่ยงซ่อนเร้น %d จาก 100" % hidden["score"],
+            })
+
+        rec = it["recovery"]
+        if rec.get("under_water"):
+            if rec["prob_90"] < 25:
+                flags.append({
+                    "level": "warn", "account_id": it["id"],
+                    "title": "%s มีโอกาสน้อยที่จะกลับมาสร้างรายได้ใน 90 วัน" % it["name"],
+                    "detail": "ต้องทำกำไรอีก %s %s จึงพ้นจุดสูงสุดเดิม โอกาสภายใน 90 วันทำการเพียง %s%%"
+                              % (_money(rec["gap"]), it["currency"], rec["prob_90"]),
+                })
+
+    if fc.get("enough"):
+        if fc["prob_below_current"] >= 25:
+            flags.append({
+                "level": "warn", "account_id": None,
+                "title": "ยังไม่ควรจ่ายส่วนแบ่งของรอบนี้ตอนนี้",
+                "detail": "มีโอกาส %s%% ที่รายได้สิ้นรอบจะต่ำกว่ายอดที่คิดได้วันนี้ "
+                          "ถ้าจ่ายตามยอดปัจจุบันแล้วพอร์ตขาดทุนต่อ จะจ่ายเกินเฉลี่ย %s %s "
+                          "และต้องไปตามเก็บคืนภายหลัง"
+                          % (fc["prob_below_current"], _money(fc["avg_overpay"]), base),
+            })
+        if fc.get("prob_hit_target") is not None and fc["prob_hit_target"] < 35:
+            flags.append({
+                "level": "info", "account_id": None,
+                "title": "เป้าหมายรอบนี้มีโอกาสไม่ถึง",
+                "detail": "จากการจำลอง %s เส้นทาง มีโอกาสถึงเป้าเพียง %s%% "
+                          "ค่ากลางที่คาดว่าจะได้คือ %s %s"
+                          % (fc["runs"], fc["prob_hit_target"], _money(fc["p50"]), base),
+            })
+
+    order = {"critical": 0, "warn": 1, "info": 2}
+    flags.sort(key=lambda f: order.get(f["level"], 3))
+    return flags
 
 
 # ================================================================== ตั้งค่า

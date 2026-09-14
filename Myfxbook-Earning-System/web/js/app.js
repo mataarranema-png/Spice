@@ -103,6 +103,19 @@ const Actions = (() => {
                tracked ? 'กลับมาติดตามพอร์ตนี้แล้ว' : 'หยุดติดตามพอร์ตนี้แล้ว');
   }
 
+  async function refreshIntel(btn) {
+    if (btn) { btn.disabled = true; btn.classList.add('is-loading'); }
+    try {
+      await api.get('/api/intelligence?force=1');
+      toast('คำนวณใหม่แล้ว', 'จำลองเส้นทางใหม่จากข้อมูลล่าสุด', 'ok');
+      await render();
+    } catch (err) {
+      toast('คำนวณไม่สำเร็จ', err.message, 'err');
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove('is-loading'); }
+    }
+  }
+
   function recompute(btn) {
     return run(() => api.post('/api/earnings/recompute', {}), 'คิดรายได้ใหม่แล้ว', { button: btn });
   }
@@ -220,7 +233,7 @@ const Actions = (() => {
 
   return {
     login, doLogin, logout, setDemo, syncNow,
-    editRule, saveRule, toggleTrack, recompute,
+    editRule, saveRule, toggleTrack, recompute, refreshIntel,
     payFor, savePayout, deletePayout, doDeletePayout,
     editGoal, saveGoal, saveSettings, editRate, saveRate,
     ackAlert, unackAlert,
@@ -237,6 +250,7 @@ MFE.route('/earnings', { title: 'รายได้ส่วนแบ่ง', su
 MFE.route('/payouts', { title: 'การจ่ายเงิน', sub: 'ยอดค้างจ่ายและสมุดบันทึกการจ่ายจริง', view: Views.payouts });
 MFE.route('/goals', { title: 'เป้าหมายรายได้', sub: 'ตั้งเป้าแต่ละรอบแล้วดูความคืบหน้า', view: Views.goals });
 MFE.route('/connect', { title: 'เชื่อมต่อและตั้งค่า', sub: 'บัญชี Myfxbook อัตราแลกเปลี่ยน และเกณฑ์การแจ้งเตือน', view: Views.connect });
+MFE.route('/intel', { title: 'ศูนย์วิเคราะห์อัจฉริยะ', sub: 'พยากรณ์รายได้ วัดความเสี่ยง และจับพอร์ตที่ซ่อนระเบิด', view: Views.intel });
 MFE.route('/alerts', { title: 'การแจ้งเตือน', sub: 'ความเสี่ยงของพอร์ตและงานที่ค้างอยู่', view: Views.alerts });
 
 

@@ -56,6 +56,8 @@ ROUTES_GET = [
     (re.compile(r"^/api/payouts$"), lambda q, m: api.payouts_board(_int(_one(q, "limit"), 200))),
     (re.compile(r"^/api/goals$"), lambda q, m: api.goals_board()),
     (re.compile(r"^/api/alerts$"), lambda q, m: api.alerts_board()),
+    (re.compile(r"^/api/intelligence$"),
+     lambda q, m: api.intelligence(force=_one(q, "force") == "1")),
     (re.compile(r"^/api/connect$"), lambda q, m: sync.status()),
     (re.compile(r"^/api/health$"), lambda q, m: {"ok": True, "service": "Myfxbook Earning System"}),
 ]
