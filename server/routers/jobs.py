@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, brain, cache, catalog, db, events, pipeline, scheduler, vault
+from .. import (auth, brain, cache, catalog, continuation, db, events,
+                pipeline, scheduler, vault)
 from .workers import ONLINE_WINDOW, worker_public
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
@@ -61,6 +62,8 @@ def job_public(row, include_result: bool = True) -> dict:
         "thread_id": row["thread_id"],
         "batch_id": row["batch_id"],
         "from_cache": bool(row["from_cache"]),
+        "continued": row["continued"],
+        "kept_chars": len(row["result_prefix"]),
         "repairs": db.loads(row["repairs"], []),
         "eta_seconds": row["eta_seconds"],
         "chain_left": len(db.loads(row["chain"], [])),
@@ -68,7 +71,8 @@ def job_public(row, include_result: bool = True) -> dict:
     if row["finished_at"] and row["started_at"]:
         data["duration"] = round(row["finished_at"] - row["started_at"], 2)
     if include_result:
-        data["result"] = row["result"]
+        # ข้อความที่ผู้ใช้ควรเห็นคือของรอบก่อนต่อกับของรอบนี้
+        data["result"] = continuation.stitch(row["result_prefix"], row["result"])
         data["payload"] = db.loads(row["payload"], {})
         data["plan"] = db.loads(row["plan"], {})
     return data

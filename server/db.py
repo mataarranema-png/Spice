@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     thread_id   TEXT,                          -- อยู่ในบทสนทนาไหน
     batch_id    TEXT,                          -- เป็นส่วนหนึ่งของงานชุดไหน
     from_cache  INTEGER NOT NULL DEFAULT 0,    -- ได้คำตอบจากแคชโดยไม่ใช้ GPU
+    result_prefix TEXT NOT NULL DEFAULT '',    -- ข้อความจากรอบก่อนที่เก็บไว้เขียนต่อ
+    continued   INTEGER NOT NULL DEFAULT 0,    -- เขียนต่อจากของเดิมมากี่รอบแล้ว
+    last_error  TEXT NOT NULL DEFAULT '',      -- ปัญหาล่าสุด ใช้ดูว่าวิธีแก้ได้ผลไหม
     vote_group  TEXT,                          -- กลุ่มคำตอบที่เอามาโหวตกัน
     schedule_id TEXT,                          -- เกิดจากงานตั้งเวลาอันไหน
     repairs     TEXT NOT NULL DEFAULT '[]',    -- ประวัติที่ระบบซ่อมผลลัพธ์ให้เอง
@@ -224,6 +227,22 @@ CREATE TABLE IF NOT EXISTS user_secrets (
     updated_at REAL NOT NULL
 );
 
+-- ลายนิ้วมือของปัญหาที่เคยเจอ พร้อมสถิติว่าวิธีแก้ไหนได้ผลจริง
+CREATE TABLE IF NOT EXISTS failure_patterns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    signature   TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'unknown',
+    remedy      TEXT NOT NULL DEFAULT 'unknown',
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    successes   INTEGER NOT NULL DEFAULT 0,
+    failures    INTEGER NOT NULL DEFAULT 0,
+    sample      TEXT NOT NULL DEFAULT '',
+    first_seen  REAL NOT NULL,
+    last_seen   REAL NOT NULL,
+    UNIQUE (user_id, signature)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts      REAL NOT NULL,
@@ -277,6 +296,9 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("jobs", "batch_id", "TEXT"),
     ("jobs", "from_cache", "INTEGER NOT NULL DEFAULT 0"),
     ("jobs", "repairs", "TEXT NOT NULL DEFAULT '[]'"),
+    ("jobs", "result_prefix", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "continued", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "last_error", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "vote_group", "TEXT"),
     ("jobs", "schedule_id", "TEXT"),
     ("threads", "memory", "TEXT NOT NULL DEFAULT ''"),

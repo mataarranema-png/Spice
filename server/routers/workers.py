@@ -9,7 +9,8 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import auth, brain, cache, catalog, db, events, pipeline, scheduler
+from .. import (auth, brain, cache, catalog, continuation, db, diagnosis, events,
+                lifespan, pipeline, scheduler)
 from ..security import hash_token, new_pair_code, new_worker_token
 
 router = APIRouter(prefix="/api/v1", tags=["workers"])
@@ -93,6 +94,8 @@ def worker_public(row) -> dict:
         "drive_mounted": bool(row["drive_mounted"]),
         "jobs_done": row["jobs_done"],
         **scheduler.health_of(dict(row)),
+        "life": lifespan.remaining(row["user_id"], dict(row)),
+        "life_note": lifespan.describe(lifespan.remaining(row["user_id"], dict(row))),
         "last_seen_at": row["last_seen_at"],
         "seconds_since_seen": round(time.time() - row["last_seen_at"], 1),
         "created_at": row["created_at"],
@@ -111,20 +114,24 @@ def authed_worker(authorization: str = Header(default="")) -> dict:
 
 
 def reap_stale_jobs() -> None:
-    """งานที่ worker รับไปแล้วเงียบหาย → คืนกลับคิวให้เครื่องอื่นทำต่อ.
+    """งานที่ worker รับไปแล้วเงียบหาย → คืนกลับคิว *พร้อมข้อความที่เขียนไปแล้ว*.
 
     นับจาก progress_at (สัญญาณล่าสุด) ไม่ใช่ started_at — งานที่ใช้เวลานาน
     เช่นดาวน์โหลดน้ำหนักโมเดลครั้งแรก จึงไม่ถูกโยนกลับเข้าคิวทั้งที่ยังทำอยู่.
+
+    ถ้ามีข้อความที่สตรีมกลับมาแล้วมากพอ จะไม่ทิ้งของเดิม แต่สั่งให้เครื่องถัดไป
+    *เขียนต่อ* จากตรงนั้น — Colab หลุดตอนงานไปแล้ว 80% จึงไม่ต้องเริ่มใหม่หมด.
     """
     cutoff = time.time() - LEASE_TIMEOUT
-    db.execute(
-        """UPDATE jobs
-           SET status='queued', worker_id=NULL, started_at=NULL, progress_at=NULL, progress=0
+    stale = db.query(
+        """SELECT * FROM jobs
            WHERE status='running'
              AND COALESCE(progress_at, started_at) IS NOT NULL
              AND COALESCE(progress_at, started_at) < ?""",
         (cutoff,),
     )
+    for row in stale:
+        pipeline.requeue_for_continuation(row, "เครื่องที่รับงานไปเงียบหาย")
 
 
 # ── ฝั่งผู้ใช้ (ล็อกอินด้วย Google) ────────────────────────────
@@ -384,12 +391,59 @@ def complete_job(
              "name": worker["name"], "reason": health["reason"]},
         )
 
-    # ── ล้มเหลว: ลองกู้เองก่อน แล้วค่อยยอมแพ้ ──────────────────
+    # ── ล้มเหลว: วินิจฉัยก่อน แล้วค่อยลองแก้ตามที่เคยได้ผล ──────
     if body.error:
-        fallback = pipeline.maybe_recover(row, body.error)
-        if fallback:
-            return {"ok": True, "status": "requeued", "fallback_model": fallback}
+        diag = diagnosis.observe(worker["user_id"], body.error)
+        db.execute(
+            "UPDATE jobs SET last_error = ? WHERE id = ?", (body.error[:2000], job_id))
+        db.execute(
+            "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+            (job_id, now, "warn", "🔎 " + diagnosis.describe(diag)),
+        )
 
+        remedy = diag["remedy"]
+        if remedy == "smaller_model":
+            fallback = pipeline.maybe_recover(row, body.error)
+            if fallback:
+                return {"ok": True, "status": "requeued", "fallback_model": fallback,
+                        "diagnosis": diag["kind"]}
+            # เล็กกว่านี้ไม่มีแล้ว — ยังเหลือทางเดียวคือหาเครื่องที่ VRAM มากกว่า
+            bigger = db.query_one(
+                """SELECT id FROM workers
+                   WHERE user_id = ? AND id != ? AND gpu_vram_mb > ? AND last_seen_at > ?""",
+                (worker["user_id"], worker["id"], worker["gpu_vram_mb"] or 0,
+                 now - ONLINE_WINDOW),
+            )
+            if bigger:
+                remedy = "retry_elsewhere"
+                db.execute(
+                    "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+                    (job_id, now, "warn",
+                     "ไม่มีโมเดลที่เล็กกว่านี้แล้ว — ลองส่งไปเครื่องที่ VRAM มากกว่าแทน"),
+                )
+
+        # ปัญหาที่เป็นของ "เครื่องนั้น" ไม่ใช่ของงาน → ให้เครื่องอื่นลองแทน
+        if remedy == "retry_elsewhere" and row["attempt"] < pipeline.MAX_ATTEMPTS:
+            db.execute(
+                """UPDATE jobs SET status='queued', worker_id=NULL, started_at=NULL,
+                       progress_at=NULL, progress=0, error='', attempt = attempt + 1
+                   WHERE id=?""",
+                (row["id"],),
+            )
+            db.execute(
+                "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+                (job_id, now, "warn",
+                 f"ปัญหานี้เป็นของเครื่อง {worker['name']} ไม่ใช่ของงาน — ส่งให้เครื่องอื่นลองแทน"),
+            )
+            events.publish(
+                worker["user_id"], "job",
+                {"action": "rerouted", "job_id": job_id, "kind": diag["kind"]},
+            )
+            return {"ok": True, "status": "rerouted", "diagnosis": diag["kind"]}
+
+        if row["last_error"]:
+            # ลองแก้ไปแล้วแต่ยังพังอยู่ — วิธีนั้นใช้ไม่ได้กับปัญหานี้
+            diagnosis.record_outcome(worker["user_id"], row["last_error"], worked=False)
         db.execute(
             "UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
             (body.error, now, job_id),
@@ -413,7 +467,9 @@ def complete_job(
         return {"ok": True, "status": "failed"}
 
     # เครื่องที่สตรีมมาแล้วส่ง result ว่างมาตอนจบได้ ให้ใช้ของที่สะสมไว้แทน
-    final_result = body.result or row["result"]
+    # แล้วต่อเข้ากับข้อความจากรอบก่อน (ถ้างานนี้เป็นการเขียนต่อ)
+    attempt_text = body.result or row["result"]
+    final_result = continuation.stitch(row["result_prefix"], attempt_text)
 
     # ── ด่านตรวจคุณภาพ: "เสร็จ" ไม่ได้แปลว่า "ใช้ได้" ───────────
     verdict = pipeline.maybe_repair(row, final_result, body.meta)
@@ -436,6 +492,11 @@ def complete_job(
     if cache.is_cacheable(payload, row["kind"]):
         cache.store(worker["user_id"], cache.fingerprint(row["model"], payload),
                     row["model"], payload, final_result, duration)
+
+    # งานนี้เคยพังแล้วกลับมาสำเร็จ = วิธีที่ระบบเลือกใช้ได้ผลจริง จดไว้
+    if row["last_error"]:
+        diagnosis.record_outcome(worker["user_id"], row["last_error"], worked=True)
+        db.execute("UPDATE jobs SET last_error = '' WHERE id = ?", (job_id,))
 
     fresh = db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
     if fresh["thread_id"]:

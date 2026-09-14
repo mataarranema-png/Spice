@@ -246,3 +246,37 @@ def test_cancelling_someone_elses_job_is_refused(user_client, client):
     user_client.post("/auth/logout")
     client.post("/auth/dev", params={"email": "nosy2@spice.local"})
     assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 404
+
+
+# ── งานที่เครื่องหลุดกลางทาง ────────────────────────────────
+def test_a_dead_worker_does_not_leave_duplicated_text(user_client, worker):
+    """เครื่องหลุดหลังสตรีมไปครึ่งทาง แล้วเครื่องใหม่มารับต่อ —
+    ข้อความต้องไม่ซ้อนกันเป็น 'ครึ่งแรก + ทั้งหมด'."""
+    import time as _time
+
+    from server.routers import workers as workers_module
+
+    job_id = _submit(user_client)
+    user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"])
+    user_client.post(f"/api/v1/worker/jobs/{job_id}/stream",
+                     json={"delta": "กาลครั้งหนึ่งนานมาแล้ว "}, headers=worker["headers"])
+
+    # เครื่องเงียบหายไปเลย
+    db.execute("UPDATE jobs SET progress_at = ?, started_at = ? WHERE id = ?",
+               (_time.time() - workers_module.LEASE_TIMEOUT - 60,
+                _time.time() - workers_module.LEASE_TIMEOUT - 60, job_id))
+    workers_module.reap_stale_jobs()
+
+    leased = user_client.post("/api/v1/worker/lease", json={},
+                              headers=worker["headers"]).json()["job"]
+    assert leased["id"] == job_id
+
+    # เครื่องใหม่ไม่รู้เรื่องของเดิม มันจึงเขียนใหม่ตั้งแต่ต้นตามปกติ
+    user_client.post(f"/api/v1/worker/jobs/{job_id}/stream",
+                     json={"delta": "กาลครั้งหนึ่งนานมาแล้ว มีชายคนหนึ่งอาศัยอยู่ในป่า."},
+                     headers=worker["headers"])
+    user_client.post(f"/api/v1/worker/jobs/{job_id}/complete",
+                     json={"result": ""}, headers=worker["headers"])
+
+    result = user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]["result"]
+    assert result.count("กาลครั้งหนึ่ง") == 1, f"ข้อความซ้อนกัน: {result!r}"

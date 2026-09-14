@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 
-from . import brain, cache, catalog, db, events, quality
+from . import brain, cache, catalog, continuation, db, events, quality
 
 MAX_CARRY_CHARS = 24_000      # ผลลัพธ์ที่ส่งต่อให้ขั้นถัดไป ยาวได้แค่ไหน
 MAX_ATTEMPTS = 2              # ลองกู้อัตโนมัติได้กี่ครั้งต่อหนึ่งงาน
@@ -222,6 +222,15 @@ def maybe_repair(row, result: str, meta: dict) -> quality.Verdict | None:
     if len(repairs) >= MAX_REPAIRS:
         return None
 
+    # ถูกตัดกลางคัน = เขียนต่อได้ ไม่ต้องเผา GPU เขียนส่วนเดิมซ้ำทั้งหมด
+    if verdict.problem == "truncated":
+        merged = continuation.stitch(row["result_prefix"], result)
+        if continuation.can_continue(row["kind"], merged, row["continued"]):
+            db.execute("UPDATE jobs SET result = ? WHERE id = ?", (result, row["id"]))
+            fresh = db.query_one("SELECT * FROM jobs WHERE id = ?", (row["id"],))
+            if requeue_for_continuation(fresh, "คำตอบชนเพดานโทเคน"):
+                return verdict
+
     payload.update(verdict.repair or {})
     repairs.append({"problem": verdict.problem, "detail": verdict.detail,
                     "changed": verdict.repair or {}, "at": time.time()})
@@ -245,3 +254,48 @@ def maybe_repair(row, result: str, meta: dict) -> quality.Verdict | None:
          "message": message},
     )
     return verdict
+
+
+def requeue_for_continuation(row, reason: str) -> bool:
+    """เอางานกลับเข้าคิว โดยเก็บข้อความที่เขียนไปแล้วไว้ให้เขียนต่อ.
+
+    คืน True เมื่อเขียนต่อได้ · คืน False เมื่อสั่งเริ่มใหม่ตั้งแต่ต้น
+    (ซึ่งต้องล้างข้อความเดิมทิ้ง ไม่งั้นรอบใหม่จะไปต่อท้ายของเก่าจนซ้ำกัน)
+    """
+    partial = continuation.stitch(row["result_prefix"], row["result"])
+    now = time.time()
+
+    if not continuation.can_continue(row["kind"], partial, row["continued"]):
+        db.execute(
+            """UPDATE jobs
+               SET status='queued', worker_id=NULL, started_at=NULL, progress_at=NULL,
+                   progress=0, result='', result_prefix='', error=''
+               WHERE id=?""",
+            (row["id"],),
+        )
+        db.execute(
+            "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+            (row["id"], now, "warn", f"{reason} — เริ่มงานใหม่ตั้งแต่ต้น"),
+        )
+        return False
+
+    payload = continuation.build_payload(db.loads(row["payload"], {}), partial, reason)
+    continued = row["continued"] + 1
+    db.execute(
+        """UPDATE jobs
+           SET status='queued', worker_id=NULL, started_at=NULL, progress_at=NULL,
+               progress=0, payload=?, result='', result_prefix=?, continued=?, error=''
+           WHERE id=?""",
+        (json.dumps(payload, ensure_ascii=False), partial, continued, row["id"]),
+    )
+    message = continuation.describe(reason, partial, continued)
+    db.execute(
+        "INSERT INTO job_events (job_id, ts, level, message) VALUES (?,?,?,?)",
+        (row["id"], now, "warn", message),
+    )
+    events.publish(
+        row["user_id"], "job",
+        {"action": "continued", "job_id": row["id"], "kept_chars": len(partial),
+         "message": message},
+    )
+    return True

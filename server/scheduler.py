@@ -14,7 +14,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from . import catalog, db
+from . import brain, catalog, db, lifespan
 
 ONLINE_WINDOW = 75          # ไม่ส่งสัญญาณเกินเท่านี้ = ถือว่าออฟไลน์
 QUEUE_SCAN_LIMIT = 100      # ดูคิวลึกสุดเท่านี้ก็พอ
@@ -39,9 +39,14 @@ def capacity_for(user_id: int) -> dict:
         "SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND status = 'queued'", (user_id,)
     )["n"]
 
+    healthy = [row for row in rows if not is_quarantined(dict(row))]
     return {
         "online": len(rows),
         "idle": len([row for row in rows if row["status"] == "idle"]),
+        "fresh": len([
+            row for row in healthy
+            if not lifespan.remaining(user_id, dict(row))["running_out"]
+        ]),
         "best_vram_mb": max((row["gpu_vram_mb"] for row in rows), default=0),
         "total_vram_mb": sum(row["gpu_vram_mb"] for row in rows),
         "warm": sorted(warm),
@@ -135,7 +140,14 @@ def job_fits_worker(job_model: str, job_kind: str, worker: dict) -> tuple[bool, 
 
 
 def rank_jobs_for_worker(rows: list[sqlite3.Row], worker: dict) -> list[sqlite3.Row]:
-    """เรียงงานตามความเหมาะกับเครื่องนี้: โมเดลที่โหลดค้างไว้มาก่อน แล้วค่อยตามคิวปกติ."""
+    """เรียงงานตามความเหมาะกับเครื่องนี้.
+
+    ลำดับความสำคัญ:
+      1. งานที่เครื่องนี้ *น่าจะทำจบก่อนหมดอายุ* — เครื่องที่ยืมมาตายได้เสมอ
+         การยัดงานยาวให้เครื่องที่เหลือเวลา 10 นาทีคือรู้ทั้งรู้ว่าจะไม่จบ
+      2. งานที่ใช้โมเดลซึ่งโหลดค้างไว้แล้ว — เริ่มได้ทันที ไม่ต้องรอโหลด
+      3. ลำดับความสำคัญและเวลาเข้าคิวตามปกติ
+    """
     warm = set(db.loads(worker.get("warm_models"), []) if isinstance(
         worker.get("warm_models"), str
     ) else (worker.get("warm_models") or []))
@@ -146,11 +158,19 @@ def rank_jobs_for_worker(rows: list[sqlite3.Row], worker: dict) -> list[sqlite3.
         if ok:
             eligible.append(row)
 
+    life = lifespan.remaining(worker["user_id"], worker)
+    history = history_for(worker["user_id"]) if life["running_out"] else {}
+
     def sort_key(row: sqlite3.Row):
+        fits_in_time = 0
+        if life["running_out"]:
+            expected = brain.estimate_seconds(row["model"], history, warm)
+            fits_in_time = 0 if lifespan.can_finish(expected, life["remaining_seconds"]) else 1
         return (
-            0 if row["model"] in warm else 1,   # โหลดค้างไว้แล้ว = เริ่มได้ทันที
-            row["priority"],                    # ด่วนกว่ามาก่อน
-            row["created_at"],                  # แล้วค่อยมาก่อนได้ก่อน
+            fits_in_time,
+            0 if row["model"] in warm else 1,
+            row["priority"],
+            row["created_at"],
         )
 
     return sorted(eligible, key=sort_key)

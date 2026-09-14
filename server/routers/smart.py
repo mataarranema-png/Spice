@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import auth, brain, catalog, consensus, db, events, pipeline, scheduler
+from .. import auth, brain, catalog, consensus, db, diagnosis, events, pipeline, scheduler
 
 router = APIRouter(prefix="/api/v1", tags=["smart"])
 
@@ -257,6 +257,18 @@ def run_due_schedules() -> int:
                 (time.time() + row["every_minutes"] * 60, row["id"]),
             )
     return len(rows)
+
+
+@router.get("/lessons")
+def lessons(user: dict = Depends(auth.require_user)) -> dict:
+    """ปัญหาที่ระบบเคยเจอ และวิธีแก้ที่พิสูจน์แล้วว่าได้ผลจริง."""
+    learned = diagnosis.history_for(user["id"])
+    return {
+        "patterns": learned,
+        "total_kinds": len(learned),
+        "proven": [item for item in learned
+                   if item["success_rate"] is not None and item["success_rate"] >= 0.5],
+    }
 
 
 # ═══ สถิติเชิงลึก ════════════════════════════════════════════
