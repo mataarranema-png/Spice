@@ -1,5 +1,7 @@
 """เทสต์ความสามารถอัจฉริยะชุดใหม่: แคช ซ่อมผลลัพธ์ บทสนทนา งานชุด สตรีม โหลดรอ."""
 
+import time
+
 import pytest
 
 from server import cache, db
@@ -393,3 +395,293 @@ def test_a_small_worker_is_never_told_to_preload_a_big_model(user_client, worker
     small = dict(db.query_one("SELECT * FROM workers WHERE id = ?", (worker["id"],)))
     small["gpu_vram_mb"] = 6000
     assert scheduler.suggest_preload(small) is None
+
+
+# ═══ 7. โหวตหาคำตอบที่น่าเชื่อถือ ════════════════════════════
+def test_voting_asks_the_same_question_several_times(user_client, worker):
+    body = user_client.post("/api/v1/votes", json={
+        "prompt": "เมืองหลวงของไทยคือที่ไหน", "model": "typhoon2-3b-instruct", "votes": 3,
+    }).json()
+    assert body["votes"] == 3 and len(body["job_ids"]) == 3
+
+    temps = []
+    for _ in range(3):
+        job = user_client.post("/api/v1/worker/lease", json={},
+                               headers=worker["headers"]).json()["job"]
+        temps.append(job["payload"]["temperature"])
+        user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                         json={"result": "กรุงเทพมหานคร"}, headers=worker["headers"])
+    assert len(set(temps)) == 3, "แต่ละรอบต้องตั้งค่าต่างกัน ไม่งั้นโหวตไม่มีความหมาย"
+
+
+def test_voting_picks_the_majority_answer(user_client, worker):
+    group = user_client.post("/api/v1/votes", json={
+        "prompt": "เมืองหลวงของไทย", "model": "typhoon2-3b-instruct", "votes": 3,
+    }).json()["vote_group"]
+
+    for answer in ["กรุงเทพมหานคร", "กรุงเทพมหานคร", "เชียงใหม่"]:
+        job = user_client.post("/api/v1/worker/lease", json={},
+                               headers=worker["headers"]).json()["job"]
+        user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                         json={"result": answer}, headers=worker["headers"])
+
+    verdict = user_client.get(f"/api/v1/votes/{group}").json()
+    assert verdict["verdict"]["answer"] == "กรุงเทพมหานคร"
+    assert verdict["verdict"]["confidence"] > 0.6
+    assert verdict["finished"] == 3
+
+
+def test_voting_is_honest_when_answers_disagree(user_client, worker):
+    group = user_client.post("/api/v1/votes", json={
+        "prompt": "เดาเลขหน่อย", "model": "typhoon2-3b-instruct", "votes": 3,
+    }).json()["vote_group"]
+    for answer in ["เจ็ด", "สิบสอง", "ยี่สิบ"]:
+        job = user_client.post("/api/v1/worker/lease", json={},
+                               headers=worker["headers"]).json()["job"]
+        user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                         json={"result": answer}, headers=worker["headers"])
+
+    body = user_client.get(f"/api/v1/votes/{group}").json()
+    assert "ควรตรวจสอบเอง" in body["summary"]
+
+
+def test_voting_never_answers_from_cache(user_client, worker):
+    """ถ้าดึงจากแคช ทุกรอบจะได้คำตอบเดียวกัน แล้วการโหวตก็ไร้ความหมาย."""
+    user_client.post("/api/v1/jobs", json={
+        "model": "typhoon2-3b-instruct", "prompt": "คำถามโหวต", "temperature": 0.1})
+    job = user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"]).json()["job"]
+    user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                     json={"result": "คำตอบเดิม"}, headers=worker["headers"])
+
+    body = user_client.post("/api/v1/votes", json={
+        "prompt": "คำถามโหวต", "model": "typhoon2-3b-instruct", "votes": 2}).json()
+    for job_id in body["job_ids"]:
+        assert user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]["from_cache"] is False
+
+
+def test_votes_are_private(user_client, client):
+    group = user_client.post("/api/v1/votes", json={
+        "prompt": "ความลับ", "model": "typhoon2-3b-instruct", "votes": 2}).json()["vote_group"]
+    user_client.post("/auth/logout")
+    client.post("/auth/dev", params={"email": "nosy3@spice.local"})
+    assert client.get(f"/api/v1/votes/{group}").status_code == 404
+
+
+# ═══ 8. งานตั้งเวลา ══════════════════════════════════════════
+def test_a_schedule_computes_its_next_run(user_client):
+    body = user_client.post("/api/v1/schedules", json={
+        "title": "สรุปข่าวเช้า", "prompt": "สรุปข่าวเทคโนโลยีวันนี้",
+        "model": "typhoon2-3b-instruct", "every_minutes": 1440, "at_hour": 8,
+    }).json()
+    assert body["next_run_in_minutes"] > 0
+    schedules = user_client.get("/api/v1/schedules").json()["schedules"]
+    assert schedules[0]["title"] == "สรุปข่าวเช้า" and schedules[0]["enabled"] is True
+
+
+def test_running_a_schedule_creates_a_real_job(user_client, worker):
+    schedule_id = user_client.post("/api/v1/schedules", json={
+        "prompt": "สรุปงานค้างทั้งหมด", "model": "typhoon2-3b-instruct",
+    }).json()["id"]
+    job_id = user_client.post(f"/api/v1/schedules/{schedule_id}/run").json()["job_id"]
+
+    job = user_client.get(f"/api/v1/jobs/{job_id}").json()["job"]
+    assert job["title"].startswith("⏰")
+    assert job["plan"]["scheduled"] is True
+
+    after = user_client.get("/api/v1/schedules").json()["schedules"][0]
+    assert after["runs"] == 1 and after["last_run_at"] > 0
+
+
+def test_due_schedules_fire_automatically(user_client):
+    from server.routers.smart import run_due_schedules
+
+    schedule_id = user_client.post("/api/v1/schedules", json={
+        "prompt": "งานที่ถึงเวลาแล้ว", "model": "typhoon2-3b-instruct",
+    }).json()["id"]
+    db.execute("UPDATE schedules SET next_run_at = ? WHERE id = ?", (1, schedule_id))
+
+    assert run_due_schedules() == 1
+    assert len(user_client.get("/api/v1/jobs").json()["jobs"]) == 1
+    # ยิงแล้วต้องเลื่อนรอบถัดไปออกไป ไม่ใช่ยิงซ้ำไม่หยุด
+    assert run_due_schedules() == 0
+
+
+def test_a_disabled_schedule_does_not_fire(user_client):
+    from server.routers.smart import run_due_schedules
+
+    schedule_id = user_client.post("/api/v1/schedules", json={
+        "prompt": "งานที่ปิดไว้", "model": "typhoon2-3b-instruct"}).json()["id"]
+    user_client.post(f"/api/v1/schedules/{schedule_id}/toggle")
+    db.execute("UPDATE schedules SET next_run_at = ? WHERE id = ?", (1, schedule_id))
+
+    assert run_due_schedules() == 0
+    assert user_client.get("/api/v1/jobs").json()["jobs"] == []
+
+
+def test_one_broken_schedule_does_not_stop_the_others(user_client):
+    from server.routers.smart import run_due_schedules
+
+    good = user_client.post("/api/v1/schedules", json={
+        "prompt": "งานที่ดี", "model": "typhoon2-3b-instruct"}).json()["id"]
+    bad = user_client.post("/api/v1/schedules", json={
+        "prompt": "งานที่พัง", "model": "typhoon2-3b-instruct"}).json()["id"]
+    db.execute("UPDATE schedules SET next_run_at = 1 WHERE id IN (?, ?)", (good, bad))
+    db.execute("UPDATE schedules SET model = 'โมเดลที่ไม่มีจริง' WHERE id = ?", (bad,))
+
+    run_due_schedules()
+    jobs = user_client.get("/api/v1/jobs").json()["jobs"]
+    assert any("งานที่ดี" in job["title"] for job in jobs)
+
+
+def test_schedules_are_private(user_client, client):
+    schedule_id = user_client.post("/api/v1/schedules", json={
+        "prompt": "ส่วนตัว", "model": "typhoon2-3b-instruct"}).json()["id"]
+    user_client.post("/auth/logout")
+    client.post("/auth/dev", params={"email": "nosy4@spice.local"})
+    assert client.get("/api/v1/schedules").json()["schedules"] == []
+    assert client.delete(f"/api/v1/schedules/{schedule_id}").status_code == 404
+
+
+# ═══ 9. เครื่องที่พังบ่อยต้องถูกพัก ══════════════════════════
+def test_a_worker_that_keeps_failing_gets_paused(user_client, worker):
+    from server import scheduler
+
+    for _ in range(3):
+        user_client.post("/api/v1/jobs", json={
+            "model": "typhoon2-3b-instruct", "prompt": "งาน"})
+        job = user_client.post("/api/v1/worker/lease", json={},
+                               headers=worker["headers"]).json()["job"]
+        user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                         json={"error": "ไฟล์เสีย"}, headers=worker["headers"])
+
+    entry = user_client.get("/api/v1/workers").json()["workers"][0]
+    assert entry["quarantined"] is True and entry["status"] == "paused"
+    assert entry["jobs_failed"] == 3
+
+    # ระหว่างถูกพัก ต้องไม่ได้รับงานใหม่
+    user_client.post("/api/v1/jobs", json={"model": "typhoon2-3b-instruct", "prompt": "งานใหม่"})
+    assert user_client.post("/api/v1/worker/lease", json={},
+                            headers=worker["headers"]).json()["job"] is None
+
+
+def test_a_success_resets_the_failure_streak(user_client, worker):
+    for outcome in [{"error": "พัง"}, {"error": "พัง"}, {"result": "สำเร็จแล้ว."}, {"error": "พัง"}]:
+        user_client.post("/api/v1/jobs", json={
+            "model": "typhoon2-3b-instruct", "prompt": "งาน"})
+        job = user_client.post("/api/v1/worker/lease", json={},
+                               headers=worker["headers"]).json()["job"]
+        user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                         json=outcome, headers=worker["headers"])
+
+    entry = user_client.get("/api/v1/workers").json()["workers"][0]
+    assert entry["quarantined"] is False       # สำเร็จคั่นกลาง จึงยังไม่ครบ 3 ติด
+    assert entry["success_rate"] == 0.25
+
+
+def test_a_paused_worker_is_not_asked_to_preload(user_client, worker):
+    from server import scheduler
+
+    db.execute("UPDATE workers SET quarantined_until = ? WHERE id = ?",
+               (time.time() + 600, worker["id"]))
+    row = dict(db.query_one("SELECT * FROM workers WHERE id = ?", (worker["id"],)))
+    assert scheduler.suggest_preload(row) is None
+
+
+# ═══ 10. สถิติเชิงลึก ════════════════════════════════════════
+def test_insights_show_where_the_gpu_time_went(user_client, worker):
+    user_client.post("/api/v1/jobs", json={"model": "typhoon2-3b-instruct", "prompt": "งาน ก"})
+    _run(user_client, worker, result="เสร็จแล้ว.")
+    user_client.post("/api/v1/jobs", json={"model": "qwen2.5-7b-instruct", "prompt": "งาน ข"})
+    _run(user_client, worker, result="เสร็จแล้ว.")
+
+    body = user_client.get("/api/v1/insights").json()
+    assert body["jobs"] == 2
+    assert len(body["by_model"]) == 2
+    assert all(entry["label"] for entry in body["by_model"])
+    assert sum(entry["share"] for entry in body["by_model"]) == pytest.approx(1.0, abs=0.05)
+    assert body["workers"][0]["success_rate"] == 1.0
+
+
+def test_insights_count_failures_and_cache_hits(user_client, worker):
+    body_in = {"model": "typhoon2-3b-instruct", "prompt": "คำถาม", "temperature": 0.1}
+    user_client.post("/api/v1/jobs", json=body_in)
+    _run(user_client, worker, result="คำตอบ")
+    user_client.post("/api/v1/jobs", json=body_in)          # ได้จากแคช
+
+    user_client.post("/api/v1/jobs", json={"model": "typhoon2-3b-instruct", "prompt": "งานพัง"})
+    job = user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"]).json()["job"]
+    user_client.post(f"/api/v1/worker/jobs/{job['id']}/complete",
+                     json={"error": "พัง"}, headers=worker["headers"])
+
+    body = user_client.get("/api/v1/insights").json()
+    assert body["cached_jobs"] == 1
+    assert body["failed"] == 1
+    assert 0 < body["failure_rate"] < 1
+
+
+# ═══ 11. ความจำของบทสนทนา (ย่อรอบเก่าแทนที่จะทิ้ง) ═══════════
+def _stuff_thread(thread_id: str, turns: int = 12, size: int = 1800) -> None:
+    for index in range(turns):
+        db.execute(
+            "INSERT INTO messages (thread_id, role, content, created_at) VALUES (?,?,?,?)",
+            (thread_id, "user" if index % 2 == 0 else "assistant",
+             f"รอบที่ {index} " + "เนื้อหายาว " * (size // 12), index + 1),
+        )
+
+
+def test_a_long_conversation_gets_compressed_instead_of_forgotten(user_client, worker):
+    thread_id = user_client.post("/api/v1/threads", json={"model": "typhoon2-3b-instruct"}).json()["id"]
+    _stuff_thread(thread_id)
+
+    user_client.post(f"/api/v1/threads/{thread_id}/messages", json={"content": "ถามต่อ"})
+
+    titles = [job["title"] for job in user_client.get("/api/v1/jobs").json()["jobs"]]
+    assert any("ย่อความจำ" in title for title in titles), "ควรมีงานย่อความจำเกิดขึ้น"
+
+
+def test_the_memory_is_fed_back_into_later_turns(user_client, worker):
+    thread_id = user_client.post("/api/v1/threads", json={"model": "typhoon2-3b-instruct"}).json()["id"]
+    db.execute("UPDATE threads SET memory = ? WHERE id = ?",
+               ("- ผู้ใช้ชื่อสมชาย\n- ทำงานสายข้อมูล", thread_id))
+
+    user_client.post(f"/api/v1/threads/{thread_id}/messages", json={"content": "ผมชื่ออะไร"})
+    job = user_client.post("/api/v1/worker/lease", json={}, headers=worker["headers"]).json()["job"]
+
+    system = job["payload"]["messages"][0]
+    assert system["role"] == "system"
+    assert "สมชาย" in system["content"]
+    assert "ความจำ" in system["content"]
+
+
+def test_the_compression_result_becomes_memory_not_a_chat_message(user_client, worker):
+    thread_id = user_client.post("/api/v1/threads", json={"model": "typhoon2-3b-instruct"}).json()["id"]
+    _stuff_thread(thread_id)
+    user_client.post(f"/api/v1/threads/{thread_id}/messages", json={"content": "ถามต่อ"})
+
+    # ทำงานทั้งหมดที่ค้างอยู่ให้เสร็จ (ทั้งคำตอบและงานย่อความจำ)
+    for _ in range(4):
+        leased = user_client.post("/api/v1/worker/lease", json={},
+                                  headers=worker["headers"]).json()["job"]
+        if leased is None:
+            break
+        result = ("- ผู้ใช้ถามเรื่องเดิมซ้ำ ๆ" if "ย่อความจำ" in leased["title"]
+                  else "คำตอบปกติ.")
+        user_client.post(f"/api/v1/worker/jobs/{leased['id']}/complete",
+                         json={"result": result}, headers=worker["headers"])
+
+    detail = user_client.get(f"/api/v1/threads/{thread_id}").json()
+    assert detail["thread"]["has_memory"] is True
+    # บันทึกความจำต้องไม่โผล่เป็นข้อความในแชท
+    assert not any("ผู้ใช้ถามเรื่องเดิมซ้ำ" in message["content"]
+                   for message in detail["messages"])
+
+
+def test_compression_does_not_repeat_for_the_same_turns(user_client, worker):
+    thread_id = user_client.post("/api/v1/threads", json={"model": "typhoon2-3b-instruct"}).json()["id"]
+    _stuff_thread(thread_id)
+    for _ in range(3):
+        user_client.post(f"/api/v1/threads/{thread_id}/messages", json={"content": "ถามอีก"})
+
+    compressions = [job for job in user_client.get("/api/v1/jobs").json()["jobs"]
+                    if "ย่อความจำ" in job["title"]]
+    assert len(compressions) == 1, "รอบเดิมที่ย่อไปแล้ว ต้องไม่ถูกย่อซ้ำ"

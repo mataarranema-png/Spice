@@ -118,6 +118,7 @@ Spice.JOB_STATUS = {
 Spice.WORKER_STATUS = {
   idle:    { label: "ว่าง · พร้อมรับงาน", pill: "pill--online",  pulse: true },
   busy:    { label: "กำลังรันงาน",        pill: "pill--busy",    pulse: true },
+  paused:  { label: "พักอยู่ · พังติดกัน", pill: "pill--danger",  pulse: false },
   offline: { label: "ออฟไลน์",            pill: "pill--offline", pulse: false },
 };
 

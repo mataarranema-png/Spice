@@ -8,6 +8,7 @@ const ROUTES = {
   gpu:      { title: "เครื่อง GPU",          crumb: "การ์ดจอที่ยืมมาและสถานะสด" },
   drive:    { title: "Drive & rclone",      crumb: "เชื่อม Google Drive เข้ากับเครื่องที่ยืมมา" },
   hub:      { title: "คลังโมเดล",            crumb: "ดึงโมเดลจาก Hugging Face มาใช้เองได้ทุกตัว" },
+  insights: { title: "สถิติ & ตั้งเวลา",     crumb: "เวลาการ์ดจอหมดไปกับอะไร และงานที่ระบบทำเอง" },
   vault:    { title: "คลังความรู้",          crumb: "ค้นหาเอกสารด้วยความหมาย" },
   settings: { title: "ตั้งค่า",              crumb: "บัญชี สิทธิ์ และการแสดงผล" },
 };
@@ -96,6 +97,12 @@ Spice.connectStream = function () {
     pill.innerHTML = `<span class="dot dot--pulse"></span> อัปเดตสด`;
   });
 
+  source.addEventListener("schedule", (event) => {
+    const data = JSON.parse(event.data);
+    Spice.toast("งานตั้งเวลาถึงกำหนด — ส่งเข้าคิวแล้ว", "info");
+    if (["overview", "jobs", "insights"].includes(Spice.state.route)) Spice.refresh();
+  });
+
   source.addEventListener("batch", () => {
     if (["overview", "jobs"].includes(Spice.state.route)) Spice.refresh();
   });
@@ -144,6 +151,12 @@ Spice.connectStream = function () {
 
     if (data.action === "repaired") {
       Spice.toast(data.message, "warn", 8000);
+    }
+
+    // การโหวตกำลังทยอยเสร็จ — อัปเดตกล่องผลโหวตไปเรื่อย ๆ
+    if (Spice.state.watchVote && Spice.state.route === "studio" &&
+        ["finished", "queued"].includes(data.action)) {
+      Spice.renderVote(Spice.state.watchVote);
     }
 
     if (data.action === "chained") {

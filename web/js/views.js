@@ -204,8 +204,15 @@ Spice.renderWorkerCard = function (worker) {
           </div>
         </div>` : ""}
 
+      ${worker.quarantined ? `
+        <div class="notice" style="margin-top:0.8rem">
+          ⏸ เครื่องนี้พังติดกันหลายงาน ระบบจึงพักไว้ชั่วคราวเพื่อไม่ให้ดูดงานทั้งคิวไปทำพัง
+          — จะกลับมารับงานเองอัตโนมัติ
+        </div>` : ""}
+
       <div class="row row--between" style="margin-top:1rem">
-        <span class="tiny dim">สัญญาณล่าสุด ${Spice.ago(worker.last_seen_at)}</span>
+        <span class="tiny dim">สัญญาณล่าสุด ${Spice.ago(worker.last_seen_at)}${
+          worker.jobs_failed ? ` · ล้มเหลว ${worker.jobs_failed} งาน` : ""}</span>
         <button class="btn btn--sm btn--danger" onclick="Spice.revokeWorker('${worker.id}','${Spice.esc(worker.name)}')">
           ถอดเครื่อง
         </button>
@@ -269,8 +276,10 @@ Spice.views.studio = async function () {
 
       <div class="row row--between row--wrap" style="gap:0.6rem">
         <span class="tiny dim" id="run-hint">ระบบจะอ่านคำสั่งแล้วตัดสินใจให้ — กด “ดูแผนก่อน” เพื่อตรวจก่อนรันได้</span>
-        <div class="row" style="gap:0.5rem">
+        <div class="row row--wrap" style="gap:0.5rem">
           <button class="btn btn--sm" onclick="Spice.previewPlan()">🔍 ดูแผนก่อน</button>
+          <button class="btn btn--sm" onclick="Spice.submitVote()"
+                  title="ถามซ้ำหลายรอบแล้วดูว่าคำตอบไหนสอดคล้องกันที่สุด">🗳 ถาม 3 รอบแล้วโหวต</button>
           <button class="btn btn--primary btn--lg" id="run-btn" onclick="Spice.submitJob()">✦ รันเลย</button>
         </div>
       </div>
@@ -1279,6 +1288,7 @@ Spice.openThread = async function (threadId) {
         <div class="tiny dim">
           ${data.thread.model === "auto" ? "เลือกโมเดลอัตโนมัติทุกข้อความ" : Spice.esc(data.thread.model)}
           ${data.thread.use_vault ? " · ใช้คลังความรู้" : ""}
+          ${data.thread.has_memory ? " · 🧠 ย่อรอบเก่าเป็นความจำแล้ว" : ""}
         </div>
       </div>
       <button class="btn btn--sm btn--danger" onclick="Spice.deleteThread('${threadId}')">ลบ</button>
@@ -1359,6 +1369,224 @@ Spice.deleteThread = async function (threadId) {
   await Spice.del(`/api/v1/threads/${threadId}`);
   if (Spice.state.activeThread === threadId) Spice.state.activeThread = null;
   Spice.toast("ลบบทสนทนาแล้ว", "ok");
+  Spice.render();
+};
+
+
+/* ═══ สถิติเชิงลึก + งานตั้งเวลา ═══════════════════════════ */
+Spice.views.insights = async function () {
+  const [data, schedules] = await Promise.all([
+    Spice.get("/api/v1/insights?days=7"),
+    Spice.get("/api/v1/schedules"),
+  ]);
+
+  const tile = (label, value, unit, icon) => `
+    <div class="card stat">
+      <div class="stat__icon">${icon}</div>
+      <div class="stat__label">${label}</div>
+      <div class="stat__value">${value}${unit ? `<small>${unit}</small>` : ""}</div>
+    </div>`;
+
+  return `
+    <div class="view-head">
+      <h2>📊 สถิติและงานอัตโนมัติ</h2>
+      <p class="small dim">เวลาการ์ดจอหมดไปกับอะไร ระบบช่วยประหยัดไปเท่าไหร่ และมีอะไรทำเองอยู่บ้าง</p>
+    </div>
+
+    <div class="grid grid--4">
+      ${tile("เวลาการ์ดจอที่ใช้ไป", Spice.duration(data.gpu_seconds), "", "⏱")}
+      ${tile("งานทั้งหมด", data.jobs, ` / ล้มเหลว ${data.failed}`, "☰")}
+      ${tile("ประหยัดด้วยแคช", Spice.duration(data.cache.saved_seconds), "", "⚡")}
+      ${tile("ระบบซ่อมผลลัพธ์เอง", data.repaired_jobs, " งาน", "🩹")}
+    </div>
+
+    <div class="grid grid--split">
+      <div class="card">
+        <div class="card-head">
+          <h3>⏱ เวลาการ์ดจอแยกตามโมเดล</h3>
+          <span class="tiny dim">7 วันล่าสุด</span>
+        </div>
+        ${data.by_model.length ? `
+          <div class="stack" style="gap:0.85rem">
+            ${data.by_model.map((entry) => `
+              <div>
+                <div class="row row--between tiny" style="margin-bottom:0.3rem">
+                  <span style="font-weight:600">${Spice.esc(entry.label)}</span>
+                  <span class="dim">${entry.runs} งาน · ${Spice.duration(entry.seconds)}
+                    (เฉลี่ย ${Spice.duration(entry.avg_seconds)})</span>
+                </div>
+                <div class="bar"><i style="width:${Math.round(entry.share * 100)}%"></i></div>
+              </div>`).join("")}
+          </div>` : Spice.empty("⏱", "ยังไม่มีงานที่รันจริงใน 7 วันนี้")}
+
+        ${data.slowest.length ? `
+          <div style="margin-top:1.2rem">
+            <div class="tiny dim" style="margin-bottom:0.45rem">งานที่กินเวลามากที่สุด</div>
+            ${data.slowest.map((job) => `
+              <div class="row row--between tiny" style="padding:0.25rem 0">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%">
+                  ${Spice.esc(job.title)}</span>
+                <span class="dim">${Spice.duration(job.seconds)}</span>
+              </div>`).join("")}
+          </div>` : ""}
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h3>🩺 สุขภาพของเครื่อง</h3></div>
+          ${data.workers.length ? `
+            <div class="stack" style="gap:0.7rem">
+              ${data.workers.map((entry) => `
+                <div class="row row--between">
+                  <div style="min-width:0">
+                    <div class="small" style="font-weight:600">${Spice.esc(entry.name)}</div>
+                    <div class="tiny dim">
+                      สำเร็จ ${entry.jobs_done} · ล้มเหลว ${entry.jobs_failed}
+                      ${entry.success_rate !== null ? ` · ${Math.round(entry.success_rate * 100)}%` : ""}
+                    </div>
+                  </div>
+                  ${entry.quarantined
+                    ? `<span class="pill pill--danger" style="font-size:0.7rem">พักอยู่</span>`
+                    : `<span class="pill pill--online" style="font-size:0.7rem">ปกติ</span>`}
+                </div>`).join("")}
+            </div>` : Spice.empty("🩺", "ยังไม่มีเครื่องในระบบ")}
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>⚡ แคช</h3></div>
+          <div class="stack" style="gap:0.55rem">
+            <div class="row row--between"><span class="small muted">คำตอบที่เก็บไว้</span>
+              <strong>${data.cache.entries}</strong></div>
+            <div class="row row--between"><span class="small muted">ใช้ซ้ำไปแล้ว</span>
+              <strong>${data.cache.hits} ครั้ง</strong></div>
+            <div class="row row--between"><span class="small muted">งานที่ตอบจากแคช</span>
+              <strong>${data.cached_jobs}</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>⏰ งานตั้งเวลา</h3>
+        <button class="btn btn--sm btn--primary" onclick="Spice.newSchedule()">+ ตั้งเวลาใหม่</button>
+      </div>
+      ${schedules.schedules.length ? `
+        <div class="stack" style="gap:0.5rem">
+          ${schedules.schedules.map((item) => `
+            <div class="row row--between row--wrap" style="gap:0.6rem;padding:0.6rem 0;border-bottom:1px solid var(--border)">
+              <div style="min-width:0;flex:1">
+                <div class="small" style="font-weight:600">${Spice.esc(item.title)}</div>
+                <div class="tiny dim">
+                  ทุก ${Spice.interval(item.every_minutes)}
+                  ${item.every_minutes >= 1440 ? ` เวลา ${String(item.at_hour).padStart(2, "0")}:${String(item.at_minute).padStart(2, "0")}` : ""}
+                  · ทำไปแล้ว ${item.runs} ครั้ง
+                  ${item.enabled ? ` · อีก ${Spice.interval(Math.max(0, item.next_run_in_minutes))}` : ""}
+                </div>
+              </div>
+              <div class="row" style="gap:0.35rem">
+                <span class="pill ${item.enabled ? "pill--online" : "pill--offline"}" style="font-size:0.7rem">
+                  ${item.enabled ? "เปิดอยู่" : "ปิดอยู่"}</span>
+                <button class="btn btn--sm" onclick="Spice.runSchedule('${item.id}')">รันเลย</button>
+                <button class="btn btn--sm btn--ghost" onclick="Spice.toggleSchedule('${item.id}')">
+                  ${item.enabled ? "ปิด" : "เปิด"}</button>
+                <button class="btn btn--sm btn--danger" onclick="Spice.deleteSchedule('${item.id}')">ลบ</button>
+              </div>
+            </div>`).join("")}
+        </div>`
+        : Spice.empty("⏰", "ยังไม่มีงานตั้งเวลา",
+            "เช่น “สรุปไฟล์ประชุมใน Drive ทุกเช้า 8 โมง” — ตั้งครั้งเดียวแล้วระบบทำเองทุกวัน")}
+    </div>`;
+};
+
+Spice.interval = function (minutes) {
+  if (minutes < 60) return `${minutes} นาที`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)} ชั่วโมง`;
+  const days = Math.round(minutes / 1440);
+  return days === 1 ? "วัน" : `${days} วัน`;
+};
+
+Spice.newSchedule = function () {
+  Spice.modal(`
+    <h3>⏰ ตั้งเวลาให้ระบบทำเอง</h3>
+    <p class="small">สั่งครั้งเดียว แล้วระบบจะทำซ้ำให้ตามรอบที่ตั้งไว้</p>
+    <label class="field">
+      <span>ชื่องาน</span>
+      <input type="text" id="s-title" placeholder="สรุปไฟล์ประชุมประจำวัน">
+    </label>
+    <label class="field">
+      <span>คำสั่ง</span>
+      <textarea id="s-prompt" rows="3" placeholder="สรุปไฟล์ประชุมล่าสุดเป็นข้อ ๆ พร้อมสิ่งที่ต้องทำต่อ"></textarea>
+    </label>
+    <div class="grid grid--2" style="gap:0.8rem">
+      <label class="field" style="margin:0">
+        <span>ทำซ้ำทุก</span>
+        <select id="s-every">
+          <option value="60">ชั่วโมง</option>
+          <option value="360">6 ชั่วโมง</option>
+          <option value="1440" selected>วัน</option>
+          <option value="10080">สัปดาห์</option>
+        </select>
+      </label>
+      <label class="field" style="margin:0">
+        <span>เวลา (สำหรับรอบวัน/สัปดาห์)</span>
+        <input type="text" id="s-at" value="08:00" placeholder="08:00">
+      </label>
+    </div>
+    <div class="grid grid--2" style="gap:0.8rem">
+      <label class="field" style="margin:0">
+        <span>ไฟล์ต้นทางใน Drive (ถ้ามี)</span>
+        <input type="text" id="s-in" placeholder="gdrive:audio/meeting.m4a">
+      </label>
+      <label class="field" style="margin:0">
+        <span>บันทึกผลลง Drive (ถ้าต้องการ)</span>
+        <input type="text" id="s-out" placeholder="gdrive:spice/daily">
+      </label>
+    </div>
+    <div class="row row--between" style="margin-top:1.2rem">
+      <button class="btn btn--sm" data-modal-close>ยกเลิก</button>
+      <button class="btn btn--primary btn--sm" onclick="Spice.saveSchedule()">ตั้งเวลา</button>
+    </div>`);
+};
+
+Spice.saveSchedule = async function () {
+  const prompt = document.getElementById("s-prompt").value.trim();
+  if (!prompt) return Spice.toast("ใส่คำสั่งก่อน", "warn");
+  const [hour, minute] = (document.getElementById("s-at").value || "08:00").split(":");
+  try {
+    const body = await Spice.post("/api/v1/schedules", {
+      title: document.getElementById("s-title").value.trim(),
+      prompt,
+      model: Spice.state.selectedModel || "auto",
+      every_minutes: Number(document.getElementById("s-every").value),
+      at_hour: Math.min(23, Math.max(0, Number(hour) || 8)),
+      at_minute: Math.min(59, Math.max(0, Number(minute) || 0)),
+      drive_input: document.getElementById("s-in").value.trim(),
+      drive_output: document.getElementById("s-out").value.trim(),
+    });
+    Spice.closeModal();
+    Spice.toast(`ตั้งเวลาแล้ว · รอบแรกอีก ${Spice.interval(body.next_run_in_minutes)}`, "ok");
+    Spice.render();
+  } catch (error) {
+    Spice.toast(error.message, "error");
+  }
+};
+
+Spice.runSchedule = async function (scheduleId) {
+  await Spice.post(`/api/v1/schedules/${scheduleId}/run`);
+  Spice.toast("ส่งเข้าคิวแล้ว", "ok");
+  Spice.render();
+};
+
+Spice.toggleSchedule = async function (scheduleId) {
+  const body = await Spice.post(`/api/v1/schedules/${scheduleId}/toggle`);
+  Spice.toast(body.enabled ? "เปิดใช้งานแล้ว" : "ปิดไว้แล้ว", "ok");
+  Spice.render();
+};
+
+Spice.deleteSchedule = async function (scheduleId) {
+  await Spice.del(`/api/v1/schedules/${scheduleId}`);
+  Spice.toast("ลบงานตั้งเวลาแล้ว", "ok");
   Spice.render();
 };
 
@@ -1499,4 +1727,64 @@ Spice.exportBatch = async function (batchId) {
         <button class="btn btn--sm" data-modal-close>ปิด</button>
       </div>`);
   }
+};
+
+
+/* ── โหวตหาคำตอบที่น่าเชื่อถือที่สุด ────────────────────────── */
+Spice.submitVote = async function () {
+  const prompt = document.getElementById("f-prompt").value.trim();
+  if (!prompt) return Spice.toast("ใส่คำถามก่อน", "warn");
+
+  try {
+    const body = await Spice.post("/api/v1/votes", {
+      prompt, model: Spice.state.selectedModel || "auto", votes: 3,
+    });
+    Spice.state.watchVote = body.vote_group;
+    Spice.toast(`ถาม ${body.votes} รอบด้วย ${body.model} แล้วจะเทียบคำตอบให้`, "ok");
+    Spice.renderVote(body.vote_group);
+  } catch (error) {
+    Spice.toast(error.message, "error");
+  }
+};
+
+Spice.renderVote = async function (group) {
+  const slot = document.getElementById("plan-slot");
+  if (!slot) return;
+  const data = await Spice.get(`/api/v1/votes/${group}`);
+  const verdict = data.verdict || {};
+  const done = data.finished >= data.total;
+
+  slot.innerHTML = `
+    <div class="card card--plan page-enter">
+      <div class="card-head">
+        <h3>🗳 โหวตคำตอบ</h3>
+        <span class="pill ${done ? "pill--online" : "pill--busy"}">
+          ${data.finished}/${data.total} รอบเสร็จแล้ว
+        </span>
+      </div>
+      <p class="small" style="margin-bottom:0.9rem">${Spice.esc(data.summary)}</p>
+
+      ${verdict.answer ? `
+        <div class="tiny dim" style="margin-bottom:0.3rem">คำตอบที่สอดคล้องกับพวกมากที่สุด</div>
+        <div class="result" style="margin-bottom:1rem">${Spice.esc(verdict.answer)}</div>` : ""}
+
+      <details>
+        <summary class="small muted" style="cursor:pointer">ดูคำตอบทุกรอบ (${data.total})</summary>
+        <div class="stack" style="gap:0.5rem;margin-top:0.7rem">
+          ${data.answers.map((entry, index) => {
+            const status = Spice.JOB_STATUS[entry.status] || Spice.JOB_STATUS.queued;
+            const isWinner = index === verdict.winner_index;
+            return `
+              <div class="card" style="padding:0.7rem 0.9rem;${isWinner ? "border-color:var(--accent)" : ""}">
+                <div class="row row--between" style="margin-bottom:0.3rem">
+                  <span class="tiny dim">รอบที่ ${index + 1} · ความสร้างสรรค์ ${entry.temperature ?? "—"}</span>
+                  <span class="pill ${status.pill}" style="font-size:0.68rem">
+                    ${isWinner ? "⭐ " : ""}${status.label}</span>
+                </div>
+                <div class="small">${Spice.esc((entry.result || "").slice(0, 300)) || "<span class='dim'>ยังไม่เสร็จ</span>"}</div>
+              </div>`;
+          }).join("")}
+        </div>
+      </details>
+    </div>`;
 };

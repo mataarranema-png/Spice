@@ -65,6 +65,8 @@ class CompleteRequest(BaseModel):
 def worker_status(row) -> str:
     if time.time() - row["last_seen_at"] > ONLINE_WINDOW:
         return "offline"
+    if scheduler.is_quarantined(dict(row)):
+        return "paused"
     return row["status"] if row["status"] in {"busy", "idle"} else "idle"
 
 
@@ -90,6 +92,7 @@ def worker_public(row) -> dict:
         "capabilities": db.loads(row["capabilities"], []),
         "drive_mounted": bool(row["drive_mounted"]),
         "jobs_done": row["jobs_done"],
+        **scheduler.health_of(dict(row)),
         "last_seen_at": row["last_seen_at"],
         "seconds_since_seen": round(time.time() - row["last_seen_at"], 1),
         "created_at": row["created_at"],
@@ -332,10 +335,14 @@ def stream_tokens(
     จะได้เห็นส่วนที่พิมพ์มาแล้ว ไม่ใช่หน้าว่าง.
     """
     row = db.query_one(
-        "SELECT id, progress FROM jobs WHERE id = ? AND worker_id = ?", (job_id, worker["id"])
+        "SELECT id, progress, status FROM jobs WHERE id = ? AND worker_id = ?",
+        (job_id, worker["id"]),
     )
     if row is None:
         raise HTTPException(404, "ไม่พบงานนี้ หรือไม่ได้ถูกมอบหมายให้เครื่องนี้")
+    if row["status"] != "running":
+        # ข้อความที่มาถึงช้ากว่าที่งานจบหรือถูกยกเลิก ต้องไม่ไปต่อท้ายผลลัพธ์
+        return {"ok": True, "ignored": True, "status": row["status"]}
     if not body.delta:
         return {"ok": True}
 
@@ -361,11 +368,21 @@ def complete_job(
     if row is None:
         raise HTTPException(404, "ไม่พบงานนี้ หรือไม่ได้ถูกมอบหมายให้เครื่องนี้")
 
+    # งานที่ไม่ได้กำลังรันอยู่ ห้ามถูกเขียนทับ — กันสองกรณีที่เกิดจริง:
+    # เครื่องยิงผลซ้ำเพราะเน็ตกระตุก และผลที่มาถึงหลังผู้ใช้กดยกเลิกไปแล้ว
+    if row["status"] != "running":
+        return {"ok": True, "status": row["status"], "ignored": True}
+
     now = time.time()
-    db.execute(
-        "UPDATE workers SET status='idle', jobs_done = jobs_done + 1 WHERE id=?",
-        (worker["id"],),
-    )
+    db.execute("UPDATE workers SET status='idle' WHERE id=?", (worker["id"],))
+    health = scheduler.record_outcome(worker["id"], succeeded=not body.error)
+    if health.get("quarantined"):
+        db.log_audit(worker["user_id"], "worker.quarantine", worker["id"])
+        events.publish(
+            worker["user_id"], "worker",
+            {"action": "quarantined", "worker_id": worker["id"],
+             "name": worker["name"], "reason": health["reason"]},
+        )
 
     # ── ล้มเหลว: ลองกู้เองก่อน แล้วค่อยยอมแพ้ ──────────────────
     if body.error:

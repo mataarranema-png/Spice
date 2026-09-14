@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS workers (
     warm_models   TEXT NOT NULL DEFAULT '[]',   -- โมเดลที่ค้างอยู่ใน VRAM พร้อมรันทันที
     drive_mounted INTEGER NOT NULL DEFAULT 0,
     jobs_done     INTEGER NOT NULL DEFAULT 0,
+    jobs_failed   INTEGER NOT NULL DEFAULT 0,
+    fails_in_a_row INTEGER NOT NULL DEFAULT 0,   -- พังติดกันกี่งาน ใช้ตัดสินว่าควรพักไหม
+    quarantined_until REAL NOT NULL DEFAULT 0,
     created_at    REAL NOT NULL,
     last_seen_at  REAL NOT NULL DEFAULT 0
 );
@@ -87,6 +90,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     thread_id   TEXT,                          -- อยู่ในบทสนทนาไหน
     batch_id    TEXT,                          -- เป็นส่วนหนึ่งของงานชุดไหน
     from_cache  INTEGER NOT NULL DEFAULT 0,    -- ได้คำตอบจากแคชโดยไม่ใช้ GPU
+    vote_group  TEXT,                          -- กลุ่มคำตอบที่เอามาโหวตกัน
+    schedule_id TEXT,                          -- เกิดจากงานตั้งเวลาอันไหน
     repairs     TEXT NOT NULL DEFAULT '[]',    -- ประวัติที่ระบบซ่อมผลลัพธ์ให้เอง
     chain       TEXT NOT NULL DEFAULT '[]',    -- ขั้นตอนที่เหลือของลูกโซ่
     plan        TEXT NOT NULL DEFAULT '{}',    -- แผนและเหตุผลที่สมองเลือกไว้
@@ -131,6 +136,8 @@ CREATE TABLE IF NOT EXISTS threads (
     model      TEXT NOT NULL DEFAULT 'auto',
     system     TEXT NOT NULL DEFAULT '',
     use_vault  INTEGER NOT NULL DEFAULT 1,
+    memory     TEXT NOT NULL DEFAULT '',   -- บันทึกความจำที่ย่อจากรอบเก่า ๆ
+    compressed_upto INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -145,6 +152,26 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages ON messages(thread_id, id);
+
+-- งานตั้งเวลา — สั่งครั้งเดียวแล้วให้ระบบทำซ้ำเองตามรอบ
+CREATE TABLE IF NOT EXISTS schedules (
+    id          TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL DEFAULT '',
+    prompt      TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT 'auto',
+    drive_input TEXT NOT NULL DEFAULT '',
+    drive_output TEXT NOT NULL DEFAULT '',
+    every_minutes INTEGER NOT NULL DEFAULT 1440,
+    at_hour     INTEGER NOT NULL DEFAULT 8,
+    at_minute   INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    next_run_at REAL NOT NULL,
+    last_run_at REAL NOT NULL DEFAULT 0,
+    runs        INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules ON schedules(enabled, next_run_at);
 
 -- ผลลัพธ์ที่เคยคำนวณไว้แล้ว — ถามซ้ำไม่ต้องจุด GPU ใหม่
 CREATE TABLE IF NOT EXISTS result_cache (
@@ -250,6 +277,13 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("jobs", "batch_id", "TEXT"),
     ("jobs", "from_cache", "INTEGER NOT NULL DEFAULT 0"),
     ("jobs", "repairs", "TEXT NOT NULL DEFAULT '[]'"),
+    ("jobs", "vote_group", "TEXT"),
+    ("jobs", "schedule_id", "TEXT"),
+    ("threads", "memory", "TEXT NOT NULL DEFAULT ''"),
+    ("threads", "compressed_upto", "INTEGER NOT NULL DEFAULT 0"),
+    ("workers", "jobs_failed", "INTEGER NOT NULL DEFAULT 0"),
+    ("workers", "fails_in_a_row", "INTEGER NOT NULL DEFAULT 0"),
+    ("workers", "quarantined_until", "REAL NOT NULL DEFAULT 0"),
 )
 
 

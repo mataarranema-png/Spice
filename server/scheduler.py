@@ -19,6 +19,10 @@ from . import catalog, db
 ONLINE_WINDOW = 75          # ไม่ส่งสัญญาณเกินเท่านี้ = ถือว่าออฟไลน์
 QUEUE_SCAN_LIMIT = 100      # ดูคิวลึกสุดเท่านี้ก็พอ
 
+# เครื่องที่พังติดกันเท่านี้ ให้พักก่อน ไม่งั้นมันจะดูดงานทั้งคิวไปทำพังทีละงาน
+FAILS_BEFORE_QUARANTINE = 3
+QUARANTINE_SECONDS = 10 * 60
+
 
 # ── ภาพรวมกำลังประมวลผลที่มีอยู่จริงตอนนี้ ────────────────────
 def capacity_for(user_id: int) -> dict:
@@ -59,6 +63,58 @@ def history_for(user_id: int) -> dict[str, float]:
 
 
 # ── หัวใจ: เลือกงานที่เหมาะกับเครื่องนี้ที่สุด ─────────────────
+def is_quarantined(worker: dict) -> bool:
+    return float(worker.get("quarantined_until") or 0) > time.time()
+
+
+def record_outcome(worker_id: str, succeeded: bool) -> dict:
+    """บันทึกว่างานล่าสุดของเครื่องนี้สำเร็จหรือพัง แล้วตัดสินว่าควรพักไหม.
+
+    เครื่องที่พังติด ๆ กันมักมีปัญหาที่ตัวมันเอง (ไดรเวอร์เพี้ยน ดิสก์เต็ม
+    เน็ตหลุด) ปล่อยให้มันรับงานต่อก็คือปล่อยให้มันพังทั้งคิว.
+    """
+    if succeeded:
+        db.execute(
+            "UPDATE workers SET jobs_done = jobs_done + 1, fails_in_a_row = 0 WHERE id = ?",
+            (worker_id,),
+        )
+        return {"quarantined": False}
+
+    db.execute(
+        """UPDATE workers
+           SET jobs_failed = jobs_failed + 1, fails_in_a_row = fails_in_a_row + 1
+           WHERE id = ?""",
+        (worker_id,),
+    )
+    row = db.query_one("SELECT fails_in_a_row, name FROM workers WHERE id = ?", (worker_id,))
+    if row and row["fails_in_a_row"] >= FAILS_BEFORE_QUARANTINE:
+        until = time.time() + QUARANTINE_SECONDS
+        db.execute(
+            "UPDATE workers SET quarantined_until = ?, fails_in_a_row = 0 WHERE id = ?",
+            (until, worker_id),
+        )
+        return {
+            "quarantined": True,
+            "until": until,
+            "reason": f"พังติดกัน {FAILS_BEFORE_QUARANTINE} งาน — พักไว้ "
+                      f"{QUARANTINE_SECONDS // 60} นาทีก่อนให้รับงานใหม่",
+        }
+    return {"quarantined": False, "fails_in_a_row": row["fails_in_a_row"] if row else 0}
+
+
+def health_of(worker: dict) -> dict:
+    done = worker.get("jobs_done") or 0
+    failed = worker.get("jobs_failed") or 0
+    total = done + failed
+    return {
+        "jobs_failed": failed,
+        "success_rate": round(done / total, 3) if total else None,
+        "fails_in_a_row": worker.get("fails_in_a_row") or 0,
+        "quarantined": is_quarantined(worker),
+        "quarantined_until": float(worker.get("quarantined_until") or 0),
+    }
+
+
 def job_fits_worker(job_model: str, job_kind: str, worker: dict) -> tuple[bool, str]:
     """เครื่องนี้รับงานนี้ไหวไหม — คืนเหตุผลด้วยเมื่อรับไม่ไหว."""
     model = catalog.get(job_model)
@@ -102,6 +158,9 @@ def rank_jobs_for_worker(rows: list[sqlite3.Row], worker: dict) -> list[sqlite3.
 
 def claim_next_job(worker: dict) -> tuple[sqlite3.Row | None, str]:
     """จองงานถัดไปให้เครื่องนี้แบบกันแย่งกัน คืน (งาน, เหตุผลที่เลือก)."""
+    if is_quarantined(worker):
+        return None, "เครื่องนี้ถูกพักชั่วคราวเพราะพังติดกันหลายงาน"
+
     now = time.time()
     with db.tx() as conn:
         rows = conn.execute(
@@ -160,6 +219,9 @@ def suggest_preload(worker: dict) -> dict | None:
     ค่าโหลดโมเดลครั้งแรกคือส่วนที่นานที่สุดของงานแรกในแต่ละวัน การเอาเวลาว่าง
     ที่ยังไงก็เสียเปล่าไปโหลดรอไว้ ทำให้งานแรกที่สั่งจริงเริ่มได้ทันที.
     """
+    if is_quarantined(worker):
+        return None
+
     warm = set(db.loads(worker.get("warm_models"), []) if isinstance(
         worker.get("warm_models"), str) else (worker.get("warm_models") or []))
 
@@ -180,9 +242,11 @@ def suggest_preload(worker: dict) -> dict | None:
     for row in rows:
         if row["model"] in warm:
             return None      # ตัวที่ใช้บ่อยที่สุดอยู่ในเครื่องแล้ว ไม่ต้องทำอะไร
-        ok, _ = job_fits_worker(row["model"], (catalog.get(row["model"]) or {}).get("kind", "text"), worker)
+        model = catalog.get(row["model"])
+        if model is None:
+            continue         # โมเดลถูกลบออกจากคลังไปแล้ว ข้ามไปดูตัวถัดไป
+        ok, _ = job_fits_worker(row["model"], model["kind"], worker)
         if ok:
-            model = catalog.get(row["model"])
             return {
                 "model": row["model"],
                 "repo": model["repo"],

@@ -214,7 +214,7 @@ def maybe_repair(row, result: str, meta: dict) -> quality.Verdict | None:
     แต่สิ่งที่ได้กลับมาคือข้อความว่าง ประโยคที่ถูกตัด หรือคำที่วนซ้ำไม่จบ.
     """
     payload = db.loads(row["payload"], {})
-    verdict = quality.inspect(result, meta, payload)
+    verdict = quality.inspect(result, meta, payload, row["kind"])
     if verdict.ok:
         return None
 

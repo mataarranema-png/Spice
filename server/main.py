@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -12,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, auth, db
 from .config import ROOT, get_settings
-from .routers import (auth_routes, batches, drive, hub, jobs, threads,
+from .routers import (auth_routes, batches, drive, hub, jobs, smart, threads,
                       vault_routes, workers)
 
 WEB_DIR = ROOT / "web"
@@ -20,10 +22,34 @@ COLAB_DIR = ROOT / "colab"
 AGENT_DIR = ROOT / "agent"
 
 
+SCHEDULE_TICK_SECONDS = 30
+
+
+async def schedule_loop() -> None:
+    """ลูปเบื้องหลังที่คอยยิงงานตั้งเวลาเมื่อถึงกำหนด."""
+    from .routers.smart import run_due_schedules
+
+    while True:
+        try:
+            await asyncio.to_thread(run_due_schedules)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # งานตั้งเวลาพังต้องไม่ทำให้ลูปตายทั้งระบบ รอบหน้าค่อยลองใหม่
+            logging.getLogger("spice").exception("ยิงงานตั้งเวลาไม่สำเร็จ")
+        await asyncio.sleep(SCHEDULE_TICK_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    yield
+    ticker = asyncio.create_task(schedule_loop())
+    try:
+        yield
+    finally:
+        ticker.cancel()
+        with suppress(asyncio.CancelledError):
+            await ticker
 
 
 app = FastAPI(
@@ -41,6 +67,7 @@ app.include_router(vault_routes.router)
 app.include_router(hub.router)
 app.include_router(threads.router)
 app.include_router(batches.router)
+app.include_router(smart.router)
 
 
 @app.middleware("http")

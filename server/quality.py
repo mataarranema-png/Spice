@@ -79,7 +79,20 @@ def _looks_truncated(text: str, meta: dict, max_tokens: int) -> bool:
     return stripped[-1] not in TERMINAL_CHARS
 
 
-def inspect(text: str, meta: dict | None = None, payload: dict | None = None) -> Verdict:
+# งานแต่ละชนิดตรวจได้ไม่เท่ากัน
+#   text      — ตรวจได้ครบทุกอาการ
+#   audio     — บทถอดเสียงมักไม่จบด้วยจุดและมีคำซ้ำตามธรรมชาติ ตรวจได้แค่ว่าง
+#   image     — ผลเป็น base64 ยาว ๆ เอากฎข้อความไปจับไม่ได้เลย
+#   embedding — ผลเป็น JSON ของตัวเลข เช่นกัน
+FULL_CHECK_KINDS = {"text"}
+
+
+def inspect(
+    text: str,
+    meta: dict | None = None,
+    payload: dict | None = None,
+    kind: str = "text",
+) -> Verdict:
     """ตรวจผลลัพธ์หนึ่งชิ้น คืนคำตัดสินพร้อมวิธีแก้ถ้ามีปัญหา."""
     meta = meta or {}
     payload = payload or {}
@@ -93,6 +106,9 @@ def inspect(text: str, meta: dict | None = None, payload: dict | None = None) ->
             # อุณหภูมิ 0 เป๊ะ ๆ ทำให้บางโมเดลตันแล้วไม่พ่นอะไรออกมาเลย
             repair={"temperature": max(0.3, temperature + 0.3)},
         )
+
+    if kind not in FULL_CHECK_KINDS:
+        return Verdict(ok=True)      # ผลที่ไม่ใช่ข้อความ ตรวจได้แค่ว่างเปล่า
 
     chunk = _repeating_tail(text)
     if chunk or _word_loop(text):
