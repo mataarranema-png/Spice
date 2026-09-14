@@ -204,6 +204,21 @@ Spice.renderWorkerCard = function (worker) {
           </div>
         </div>` : ""}
 
+      ${worker.life && worker.status !== "offline" ? `
+        <div style="margin-top:0.8rem">
+          <div class="row row--between tiny" style="margin-bottom:0.3rem">
+            <span class="${worker.life.running_out ? "" : "dim"}"
+                  style="${worker.life.running_out ? "color:var(--warn)" : ""}">
+              ⏳ อายุที่เหลือโดยประมาณ</span>
+            <span class="dim">${Spice.lifeLeft(worker.life.remaining_seconds)}</span>
+          </div>
+          <div class="bar ${worker.life.running_out ? "" : "bar--mint"}">
+            <i style="width:${Math.round(
+              100 * worker.life.remaining_seconds / Math.max(1, worker.life.lifetime_seconds))}%"></i>
+          </div>
+          <div class="tiny dim" style="margin-top:0.3rem">${Spice.esc(worker.life_note || "")}</div>
+        </div>` : ""}
+
       ${worker.quarantined ? `
         <div class="notice" style="margin-top:0.8rem">
           ⏸ เครื่องนี้พังติดกันหลายงาน ระบบจึงพักไว้ชั่วคราวเพื่อไม่ให้ดูดงานทั้งคิวไปทำพัง
@@ -642,6 +657,7 @@ Spice.renderJobList = function (jobs) {
             ${job.parent_id ? " · ต่อจากงานก่อนหน้า" : ""}
             ${job.attempt > 1 ? ` · ลองใหม่ครั้งที่ ${job.attempt}` : ""}
             ${(job.repairs || []).length ? ` · ซ่อมผลลัพธ์ ${job.repairs.length} ครั้ง` : ""}
+            ${job.continued ? ` · เขียนต่อจากของเดิม ${job.continued} รอบ` : ""}
           </div>
           ${job.status === "running"
             ? `<div class="bar" style="margin-top:0.4rem"><i style="width:${Math.round(job.progress * 100)}%"></i></div>`
@@ -706,6 +722,14 @@ Spice.openJob = async function (jobId) {
     ${job.from_cache ? `
       <div class="notice" style="margin-bottom:1rem">
         ⚡ คำตอบนี้มาจากผลลัพธ์ที่เคยคำนวณไว้แล้ว — ไม่ได้ใช้การ์ดจอเลย
+      </div>` : ""}
+
+    ${job.continued ? `
+      <div class="notice" style="margin-bottom:1rem">
+        <strong>♻️ งานนี้ถูกเขียนต่อจากของเดิม ${job.continued} รอบ</strong>
+        <div>เครื่องที่ทำอยู่หลุดกลางทาง ระบบจึงเก็บข้อความที่เขียนไปแล้ว
+          ${job.kept_chars.toLocaleString()} ตัวอักษรไว้ แล้วสั่งให้เครื่องถัดไปเขียนต่อ
+          แทนที่จะทิ้งทั้งหมดแล้วเริ่มใหม่</div>
       </div>` : ""}
 
     ${job.payload?.prompt ? `
@@ -1375,9 +1399,10 @@ Spice.deleteThread = async function (threadId) {
 
 /* ═══ สถิติเชิงลึก + งานตั้งเวลา ═══════════════════════════ */
 Spice.views.insights = async function () {
-  const [data, schedules] = await Promise.all([
+  const [data, schedules, lessons] = await Promise.all([
     Spice.get("/api/v1/insights?days=7"),
     Spice.get("/api/v1/schedules"),
+    Spice.get("/api/v1/lessons"),
   ]);
 
   const tile = (label, value, unit, icon) => `
@@ -1464,6 +1489,50 @@ Spice.views.insights = async function () {
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>🔎 บทเรียนที่ระบบจำไว้</h3>
+        <span class="tiny dim">
+          ${lessons.total_kinds ? `รู้จักปัญหา ${lessons.total_kinds} แบบ · พิสูจน์แล้วว่าแก้ได้ ${lessons.proven.length} แบบ`
+                                : "ยังไม่เคยเจอปัญหา"}
+        </span>
+      </div>
+      ${lessons.patterns.length ? `
+        <p class="small dim" style="margin-bottom:0.9rem">
+          ระบบย่อ error เป็นลายนิ้วมือ (ตัดตัวเลขและพาธทิ้ง) แล้วจำว่าวิธีแก้ไหนได้ผลจริง
+          — วิธีที่แก้แล้วยังพังอยู่จะถูกเลิกใช้ไปเอง
+        </p>
+        <div class="stack" style="gap:0.5rem">
+          ${lessons.patterns.map((item) => {
+            const rate = item.success_rate;
+            const badge = rate === null
+              ? `<span class="tag">ยังไม่ได้ลองแก้</span>`
+              : rate >= 0.5
+                ? `<span class="pill pill--online" style="font-size:0.7rem">แก้ได้ ${Math.round(rate * 100)}%</span>`
+                : `<span class="pill pill--danger" style="font-size:0.7rem">ยังแก้ไม่ได้</span>`;
+            return `
+              <div class="card" style="padding:0.75rem 0.95rem">
+                <div class="row row--between row--wrap" style="gap:0.5rem">
+                  <div style="min-width:0">
+                    <div class="small" style="font-weight:600">
+                      ${Spice.esc(Spice.PROBLEM_LABEL[item.kind] || item.kind)}
+                      <span class="dim" style="font-weight:400"> · เจอ ${item.occurrences} ครั้ง</span>
+                    </div>
+                    <div class="tiny dim">วิธีแก้: ${Spice.esc(item.remedy)}</div>
+                  </div>
+                  ${badge}
+                </div>
+                <div class="tiny dim mono" style="margin-top:0.4rem;opacity:0.65;
+                     overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  ${Spice.esc(item.sample)}
+                </div>
+              </div>`;
+          }).join("")}
+        </div>`
+        : Spice.empty("🔎", "ยังไม่เคยเจอปัญหา",
+            "เมื่อมีงานล้มเหลว ระบบจะจำอาการและวิธีแก้ที่ได้ผลไว้ให้เอง")}
     </div>
 
     <div class="card">

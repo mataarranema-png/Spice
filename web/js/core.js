@@ -115,6 +115,17 @@ Spice.JOB_STATUS = {
   cancelled: { label: "ยกเลิก",   pill: "pill--offline", icon: "—" },
 };
 
+Spice.PROBLEM_LABEL = {
+  out_of_memory:   "หน่วยความจำ GPU ไม่พอ",
+  needs_auth:      "โมเดลต้องขอสิทธิ์ก่อน",
+  missing_package: "เครื่องขาดไลบรารี",
+  disk_full:       "ดิสก์ของเครื่องเต็ม",
+  device_fault:    "การ์ดจอของเครื่องมีปัญหา",
+  missing_file:    "หาไฟล์ต้นทางไม่เจอ",
+  network:         "เครือข่ายของเครื่องมีปัญหา",
+  unknown:         "ปัญหาที่ยังไม่รู้จัก",
+};
+
 Spice.WORKER_STATUS = {
   idle:    { label: "ว่าง · พร้อมรับงาน", pill: "pill--online",  pulse: true },
   busy:    { label: "กำลังรันงาน",        pill: "pill--busy",    pulse: true },
@@ -160,3 +171,12 @@ Spice.empty = (icon, title, hint = "") => `
 
 Spice.skeleton = (rows = 3) =>
   Array.from({ length: rows }, () => `<div class="skeleton" style="height:64px"></div>`).join("");
+
+
+/* อายุที่เหลือของเครื่องที่ยืมมา — อ่านง่ายกว่าวินาทีดิบ ๆ */
+Spice.lifeLeft = function (seconds) {
+  if (seconds > 86400) return `${Math.round(seconds / 86400)} วัน`;
+  if (seconds > 3600) return `${(seconds / 3600).toFixed(1)} ชั่วโมง`;
+  if (seconds > 60) return `${Math.round(seconds / 60)} นาที`;
+  return "ใกล้หมดแล้ว";
+};
