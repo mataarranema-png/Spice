@@ -169,6 +169,19 @@ Spice.empty = (icon, title, hint = "") => `
     ${hint ? `<div class="small">${hint}</div>` : ""}
   </div>`;
 
+/* ป้ายสุขภาพเครื่อง — แยก "พักอยู่" (ระบบกันไว้แล้ว) ออกจาก "น่าจับตา"
+   ที่ยังไม่ถึงเกณฑ์พัก แต่ล้มเหลวบ่อยจนไม่ควรเรียกว่าปกติ */
+Spice.healthPill = function (entry) {
+  if (entry.quarantined) {
+    return `<span class="pill pill--danger" style="font-size:0.7rem">พักอยู่</span>`;
+  }
+  const rate = entry.success_rate;
+  if (entry.jobs_failed > 0 && rate !== null && rate < 0.6) {
+    return `<span class="pill pill--busy" style="font-size:0.7rem">น่าจับตา</span>`;
+  }
+  return `<span class="pill pill--online" style="font-size:0.7rem">ปกติ</span>`;
+};
+
 Spice.skeleton = (rows = 3) =>
   Array.from({ length: rows }, () => `<div class="skeleton" style="height:64px"></div>`).join("");
 

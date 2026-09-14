@@ -14,6 +14,11 @@ const ROUTES = {
 };
 
 /* ── เส้นทาง ───────────────────────────────────────────────── */
+/* ยอมรับทั้ง #gpu, #/gpu และ #/gpu/ — ลิงก์ที่คนพิมพ์เองจะได้ไม่เด้งกลับหน้าแรก */
+Spice.routeFromHash = function () {
+  return decodeURIComponent(location.hash.slice(1)).replace(/^\/+|\/+$/g, "");
+};
+
 Spice.go = function (route) {
   if (!ROUTES[route]) route = "overview";
   Spice.state.route = route;
@@ -404,12 +409,12 @@ Spice.boot = async function () {
   };
 
   window.addEventListener("hashchange", () => {
-    const route = location.hash.slice(1);
+    const route = Spice.routeFromHash();
     if (route && route !== Spice.state.route) Spice.go(route);
   });
 
   Spice.connectStream();
-  Spice.go(location.hash.slice(1) || "overview");
+  Spice.go(Spice.routeFromHash() || "overview");
 
   // กันเหนียว: รีเฟรชเบา ๆ ทุก 30 วินาที เผื่อ SSE หลุดโดยไม่รู้ตัว
   setInterval(() => {

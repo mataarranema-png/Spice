@@ -22,17 +22,25 @@ Spice.views.overview = async function () {
       <div class="stat__value">${value}${unit ? `<small>${unit}</small>` : ""}</div>
     </div>`;
 
+  const everConnected = workersData.summary.total > 0;
+  const bannerTitle = everConnected
+    ? "⚡ เครื่องทั้งหมดออฟไลน์อยู่"
+    : "⚡ ยังไม่มีการ์ดจอในระบบ";
+  const bannerBody = everConnected
+    ? `เคยเชื่อมไว้ ${workersData.summary.total} เครื่อง แต่ตอนนี้ไม่มีเครื่องไหนส่งสัญญาณเข้ามา —
+       แท็บ Colab อาจถูกปิดหรือหมดเวลา เปิดโน้ตบุ๊กแล้วรันใหม่อีกครั้ง งานในคิวจะวิ่งต่อเอง`
+    : `เชื่อม Google Colab เข้ามาเพื่อยืมการ์ดจอ Tesla T4 มาใช้ฟรี —
+       ใช้เวลาไม่ถึงหนึ่งนาที และวางคำสั่งแค่บรรทัดเดียว`;
   const connectBanner = online === 0 ? `
     <div class="card" style="border-color:rgba(255,138,61,0.3);background:var(--brand-soft)">
       <div class="row row--wrap row--between">
         <div style="max-width:640px">
-          <h3>⚡ ยังไม่มีการ์ดจอในระบบ</h3>
-          <p class="small" style="margin:0.4rem 0 0">
-            เชื่อม Google Colab เข้ามาเพื่อยืมการ์ดจอ Tesla T4 มาใช้ฟรี —
-            ใช้เวลาไม่ถึงหนึ่งนาที และวางคำสั่งแค่บรรทัดเดียว
-          </p>
+          <h3>${bannerTitle}</h3>
+          <p class="small" style="margin:0.4rem 0 0">${bannerBody}</p>
         </div>
-        <button class="btn btn--primary" onclick="Spice.connectFlow()">เชื่อมเครื่อง Colab</button>
+        <button class="btn btn--primary" onclick="Spice.connectFlow()">
+          ${everConnected ? "เชื่อมเครื่องใหม่" : "เชื่อมเครื่อง Colab"}
+        </button>
       </div>
     </div>` : "";
 
@@ -1346,9 +1354,13 @@ Spice.renderBubble = function (message) {
 Spice.showLiveBubble = function (text) {
   const slot = document.getElementById("chat-live");
   if (!slot) return;
+  // ยังไม่มีตัวอักษรออกมา = งานยังรอคิว/กำลังโหลดโมเดล — บอกให้รู้ ไม่ใช่กล่องเปล่า
+  const body = text
+    ? `${Spice.esc(text)}<span class="caret"></span>`
+    : `<span class="dim">กำลังรอเครื่องว่าง…</span><span class="caret"></span>`;
   slot.innerHTML = `
     <div class="bubble-row">
-      <div class="bubble bubble--live">${Spice.esc(text)}<span class="caret"></span></div>
+      <div class="bubble bubble--live">${body}</div>
     </div>`;
   Spice.scrollChat();
 };
@@ -1470,9 +1482,7 @@ Spice.views.insights = async function () {
                       ${entry.success_rate !== null ? ` · ${Math.round(entry.success_rate * 100)}%` : ""}
                     </div>
                   </div>
-                  ${entry.quarantined
-                    ? `<span class="pill pill--danger" style="font-size:0.7rem">พักอยู่</span>`
-                    : `<span class="pill pill--online" style="font-size:0.7rem">ปกติ</span>`}
+                  ${Spice.healthPill(entry)}
                 </div>`).join("")}
             </div>` : Spice.empty("🩺", "ยังไม่มีเครื่องในระบบ")}
         </div>
