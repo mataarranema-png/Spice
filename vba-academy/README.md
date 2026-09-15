@@ -44,3 +44,16 @@ src/components/ ตาราง Excel, ตัวแก้ไขโค้ด, แ
 ```
 
 Deploy: Vercel (Vite static build)
+
+## ทดสอบในเบราว์เซอร์ (ไม่บังคับ)
+
+```bash
+npm install -D playwright   # ติดตั้งเฉพาะตอนอยากรัน e2e
+npx vite preview --port 4173 &
+node tests/browser-check.mjs
+```
+
+## Deploy
+
+ดูวิธีที่ `../vercel-deploy/README.md` — แนะนำให้เชื่อม repo กับ Vercel โดยตั้ง
+Root Directory เป็น `vba-academy` แล้วปล่อยให้ auto-detect เป็น Vite
